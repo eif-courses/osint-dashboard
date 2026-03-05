@@ -7,6 +7,10 @@ import { buildFindings } from "../utils/findings";
 import { getEmailSecurity } from "../utils/emailSecurity";
 import { getWebSecurity } from "../utils/webSecurity";
 import { getDnsPosture } from "../utils/dnsPosture";
+import { checkTakeoverRisks } from "../utils/takeoverCheck";
+import { getTechFingerprint } from "../utils/techFingerprint";
+import { getTlsDeep } from "../utils/tlsDeep";
+import { discoverEndpoints } from "../utils/endpointDiscovery";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,10 +32,15 @@ function normalizeSubdomains(domain: string, raw: string) {
   );
 }
 
-// Score weights summing to 100
-function calculateScore(email: any, web: any, dns: any): { score: number; riskLevel: string; breakdown: Record<string, number> } {
+// Score weights summing to 100, with optional penalties from new modules
+function calculateScore(
+  email: any,
+  web: any,
+  dns: any,
+  takeovers?: any[],
+  tlsDeep?: any
+): { score: number; riskLevel: string; breakdown: Record<string, number> } {
   const breakdown: Record<string, number> = {};
-  let score = 0;
 
   // SPF: 10 pts (5 for present, 5 bonus for hardfail)
   if (email?.spf?.record) {
@@ -97,7 +106,26 @@ function calculateScore(email: any, web: any, dns: any): { score: number; riskLe
   // robots.txt: 2 pts
   breakdown.robotsTxt = web?.robotsTxt ? 2 : 0;
 
-  score = Object.values(breakdown).reduce((a, b) => a + b, 0);
+  let score = Object.values(breakdown).reduce((a, b) => a + b, 0);
+
+  // ── Penalties from new modules ─────────────────────────────────
+  // Takeover risk: -20 if any found (capped — one penalty per domain)
+  if (takeovers && takeovers.length > 0) {
+    breakdown.takeoverPenalty = -20;
+    score = Math.max(0, score - 20);
+  }
+
+  // Weak TLS cipher: -10
+  if (tlsDeep?.weakCipher) {
+    breakdown.weakCipherPenalty = -10;
+    score = Math.max(0, score - 10);
+  }
+
+  // Self-signed certificate: -10
+  if (tlsDeep?.selfSigned) {
+    breakdown.selfSignedPenalty = -10;
+    score = Math.max(0, score - 10);
+  }
 
   const riskLevel =
     score >= 70 ? "Low risk"
@@ -204,11 +232,28 @@ export default defineEventHandler(async (event) => {
     hosts = [];
   }
 
-  // FINDINGS (with web + DNS posture)
-  const findings = buildFindings(domain, hosts as any, email, web, dnsPostureFull);
+  // Run new analysis modules in parallel (non-blocking — failures return empty results)
+  const [takeovers, techStack, tlsDeep, endpoints] = await Promise.all([
+    checkTakeoverRisks(subdomains).catch(() => []),
+    getTechFingerprint(domain).catch(() => ({ analytics: [] })),
+    getTlsDeep(domain).catch(() => ({ weakCipher: false, selfSigned: false })),
+    discoverEndpoints(domain).catch(() => []),
+  ]);
 
-  // SCORE
-  const scoreResult = calculateScore(email, web, dnsPostureFull);
+  // FINDINGS (with all modules)
+  const findings = buildFindings(
+    domain,
+    hosts as any,
+    email,
+    web,
+    dnsPostureFull,
+    takeovers,
+    endpoints,
+    tlsDeep as any
+  );
+
+  // SCORE (with takeover + TLS penalties)
+  const scoreResult = calculateScore(email, web, dnsPostureFull, takeovers, tlsDeep);
 
   return {
     domain,
@@ -219,9 +264,13 @@ export default defineEventHandler(async (event) => {
     subdomains,
     hosts,
     findings,
+    techStack,
+    tlsDeep,
+    endpoints,
+    takeovers,
     meta: {
       scannedHosts: targets.length,
-      scanType: "DNS(email/posture) + HTTP/TLS headers + amass(passive) + nmap(-sT -sV, top 100 ports)",
+      scanType: "DNS(email/posture) + HTTP/TLS headers + amass(passive) + nmap(-sT -sV, top 100 ports) + tech fingerprint + endpoint discovery",
       toolStatus: {
         amass: { status: amassStatus, note: amassNote },
         nmap: { status: nmapStatus, note: nmapNote },

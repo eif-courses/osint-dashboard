@@ -2,7 +2,7 @@
 import mermaid from "mermaid";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.6.0";
 
 type Severity = "low" | "medium" | "high";
 
@@ -282,8 +282,31 @@ function buildMarkdownReport(data: any) {
     lines.push(`- Cookies: ${w.cookies.count}`);
     lines.push(`- security.txt: ${w.securityTxt ? "found" : "not found"}`);
     lines.push(`- robots.txt: ${w.robotsTxt ? "accessible" : "not found"}`);
+    if ((w.robotsTxtPaths ?? []).length) {
+      lines.push(`- robots.txt Disallow paths: ${w.robotsTxtPaths.join(", ")}`);
+    }
   }
   lines.push("");
+
+  if (data.tlsDeep) {
+    lines.push(`### TLS Deep Analysis`);
+    lines.push(`- Negotiated version: ${data.tlsDeep.negotiatedVersion ?? "n/a"}`);
+    lines.push(`- Cipher suite: ${data.tlsDeep.cipher ?? "n/a"}`);
+    lines.push(`- Weak cipher: ${data.tlsDeep.weakCipher ? "YES ⚠" : "no"}`);
+    lines.push(`- Self-signed: ${data.tlsDeep.selfSigned ? "YES ⚠" : "no"}`);
+    if (data.tlsDeep.issuer) lines.push(`- Issuer: ${data.tlsDeep.issuer}`);
+    lines.push("");
+  }
+
+  if (data.techStack) {
+    lines.push(`### Technology Stack`);
+    if (data.techStack.cdn) lines.push(`- CDN: ${data.techStack.cdn}`);
+    if (data.techStack.framework) lines.push(`- Framework: ${data.techStack.framework}`);
+    if (data.techStack.backend) lines.push(`- Backend/Server: ${data.techStack.backend}`);
+    if (data.techStack.hosting) lines.push(`- Hosting: ${data.techStack.hosting}`);
+    if ((data.techStack.analytics ?? []).length) lines.push(`- Analytics: ${data.techStack.analytics.join(", ")}`);
+    lines.push("");
+  }
 
   lines.push(`## DNS Posture`);
   const d = data.dnsPosture;
@@ -342,6 +365,26 @@ function buildMarkdownReport(data: any) {
   lines.push(`## Discovered Subdomains`);
   (data.subdomains ?? []).forEach((s: string) => lines.push(`- ${s}`));
   lines.push("");
+
+  if ((data.takeovers ?? []).length) {
+    lines.push(`## Subdomain Takeover Risks`);
+    for (const t of data.takeovers) {
+      lines.push(`### [HIGH] ${t.subdomain}`);
+      lines.push(`- Provider: ${t.provider}`);
+      lines.push(`- CNAME: ${t.cname}`);
+      lines.push(`- Evidence: "${t.evidence}"`);
+      lines.push("");
+    }
+  }
+
+  if ((data.endpoints ?? []).length) {
+    lines.push(`## Discovered Endpoints`);
+    for (const ep of data.endpoints) {
+      const risk = ep.sensitive ? " ⚠ SENSITIVE" : "";
+      lines.push(`- ${ep.path} → HTTP ${ep.status}${risk}`);
+    }
+    lines.push("");
+  }
 
   lines.push(`## Limitations & Responsible Use`);
   lines.push(`- Public-signal posture assessment only (DNS/HTTP/TLS). Not a penetration test.`);
@@ -446,7 +489,7 @@ async function renderMermaidForResult(index: number) {
       <div>
         <h1 class="text-xl font-bold tracking-tight">Domain Security Posture Analyzer</h1>
         <p class="text-xs opacity-50 mt-0.5">
-          Version {{ APP_VERSION }} · DNS · HTTP/TLS headers · Email security · Amass (passive) · Nmap (-sT)
+          Version {{ APP_VERSION }} · DNS · HTTP/TLS · Email · Amass · Nmap · Tech fingerprint · Endpoint discovery · Takeover check
         </p>
       </div>
       <label class="flex items-center gap-2 cursor-pointer select-none">
@@ -849,6 +892,32 @@ async function renderMermaidForResult(index: number) {
                       {{ sr.data.web?.https?.redirect ? "yes" : "no" }}
                     </UBadge>
                   </div>
+                  <template v-if="sr.data.tlsDeep">
+                    <div class="flex justify-between pt-0.5 border-t border-gray-100 dark:border-gray-900 mt-0.5">
+                      <span class="opacity-50">TLS version (negotiated)</span>
+                      <span class="font-mono opacity-70">{{ sr.data.tlsDeep.negotiatedVersion ?? "n/a" }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                      <span class="opacity-50">Cipher suite</span>
+                      <span class="font-mono text-[10px] opacity-70 truncate max-w-[180px]">{{ sr.data.tlsDeep.cipher ?? "n/a" }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                      <span class="opacity-50">Weak cipher</span>
+                      <UBadge size="xs" :color="sr.data.tlsDeep.weakCipher ? 'red' : 'green'" variant="subtle">
+                        {{ sr.data.tlsDeep.weakCipher ? "yes" : "no" }}
+                      </UBadge>
+                    </div>
+                    <div class="flex justify-between">
+                      <span class="opacity-50">Self-signed</span>
+                      <UBadge size="xs" :color="sr.data.tlsDeep.selfSigned ? 'red' : 'green'" variant="subtle">
+                        {{ sr.data.tlsDeep.selfSigned ? "yes" : "no" }}
+                      </UBadge>
+                    </div>
+                    <div v-if="sr.data.tlsDeep.issuer" class="flex justify-between">
+                      <span class="opacity-50">Issuer</span>
+                      <span class="opacity-70 text-[10px] truncate max-w-[160px]">{{ sr.data.tlsDeep.issuer }}</span>
+                    </div>
+                  </template>
                 </div>
               </div>
 
@@ -894,6 +963,42 @@ async function renderMermaidForResult(index: number) {
                 </div>
               </div>
 
+              <!-- Technology Fingerprint -->
+              <div v-if="sr.data.techStack" class="rounded-lg border border-gray-200 dark:border-gray-800 p-2.5">
+                <div class="flex items-center justify-between mb-1.5">
+                  <span class="text-xs font-semibold">Technology Stack</span>
+                  <UBadge size="xs" color="gray" variant="subtle">fingerprint</UBadge>
+                </div>
+                <div class="space-y-0.5 text-xs">
+                  <div v-if="sr.data.techStack.cdn" class="flex justify-between">
+                    <span class="opacity-50">CDN</span>
+                    <span class="opacity-80 font-medium">{{ sr.data.techStack.cdn }}</span>
+                  </div>
+                  <div v-if="sr.data.techStack.framework" class="flex justify-between">
+                    <span class="opacity-50">Framework</span>
+                    <span class="opacity-80 font-medium">{{ sr.data.techStack.framework }}</span>
+                  </div>
+                  <div v-if="sr.data.techStack.backend" class="flex justify-between">
+                    <span class="opacity-50">Backend / Server</span>
+                    <span class="opacity-80 font-medium">{{ sr.data.techStack.backend }}</span>
+                  </div>
+                  <div v-if="sr.data.techStack.hosting" class="flex justify-between">
+                    <span class="opacity-50">Hosting</span>
+                    <span class="opacity-80 font-medium">{{ sr.data.techStack.hosting }}</span>
+                  </div>
+                  <div v-if="(sr.data.techStack.analytics ?? []).length" class="flex justify-between">
+                    <span class="opacity-50">Analytics</span>
+                    <span class="opacity-80 text-right">{{ sr.data.techStack.analytics.join(", ") }}</span>
+                  </div>
+                  <p
+                    v-if="!sr.data.techStack.cdn && !sr.data.techStack.framework && !sr.data.techStack.backend && !(sr.data.techStack.analytics?.length)"
+                    class="text-[10px] opacity-40"
+                  >
+                    No recognisable technologies detected.
+                  </p>
+                </div>
+              </div>
+
               <!-- Cookies -->
               <div class="rounded-lg border border-gray-200 dark:border-gray-800 p-2.5">
                 <div class="flex items-center justify-between mb-1">
@@ -924,6 +1029,17 @@ async function renderMermaidForResult(index: number) {
                   <UBadge size="xs" :color="sr.data.web?.robotsTxt ? 'green' : 'gray'" variant="subtle">
                     {{ sr.data.web?.robotsTxt ? "accessible" : "not found" }}
                   </UBadge>
+                </div>
+                <div v-if="(sr.data.web?.robotsTxtPaths ?? []).length" class="mt-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-900">
+                  <p class="text-[10px] font-semibold opacity-50 mb-1">Disallow entries ({{ sr.data.web.robotsTxtPaths.length }})</p>
+                  <div class="flex flex-wrap gap-1">
+                    <span
+                      v-for="p in sr.data.web.robotsTxtPaths.slice(0, 20)"
+                      :key="p"
+                      class="text-[10px] font-mono bg-gray-100 dark:bg-gray-800 rounded px-1 py-0.5 opacity-70"
+                    >{{ p }}</span>
+                    <span v-if="sr.data.web.robotsTxtPaths.length > 20" class="text-[10px] opacity-40">+{{ sr.data.web.robotsTxtPaths.length - 20 }} more</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1084,6 +1200,96 @@ async function renderMermaidForResult(index: number) {
                 />
               </div>
             </div>
+          </UCard>
+        </div>
+
+        <!-- ── Endpoint Discovery + Takeovers row ── -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+
+          <!-- ── Endpoint Discovery ── -->
+          <UCard :ui="{ body: { padding: 'p-3' }, header: { padding: 'px-3 py-2' } }">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <UIcon name="i-heroicons-magnifying-glass-circle" class="w-4 h-4 opacity-60" />
+                <span class="text-sm font-medium">Endpoint Discovery</span>
+                <UBadge size="xs" color="gray" variant="subtle">{{ (sr.data.endpoints ?? []).length }} found</UBadge>
+              </div>
+            </template>
+            <div v-if="!(sr.data.endpoints ?? []).length" class="text-sm opacity-50 py-1">
+              No common endpoints responded (200/401/403).
+            </div>
+            <div v-else class="overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr class="border-b border-gray-200 dark:border-gray-800">
+                    <th class="text-left py-1.5 pr-3 opacity-50 font-medium">Path</th>
+                    <th class="text-left py-1.5 pr-3 opacity-50 font-medium">Status</th>
+                    <th class="text-left py-1.5 opacity-50 font-medium">Risk</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="ep in (sr.data.endpoints ?? [])"
+                    :key="ep.path"
+                    class="border-b border-gray-100 dark:border-gray-900 last:border-0"
+                  >
+                    <td class="py-1 pr-3 font-mono opacity-80">{{ ep.path }}</td>
+                    <td class="py-1 pr-3">
+                      <UBadge size="xs" :color="ep.status === 200 ? 'amber' : 'gray'" variant="subtle">{{ ep.status }}</UBadge>
+                    </td>
+                    <td class="py-1">
+                      <UBadge size="xs" :color="ep.sensitive ? 'red' : 'gray'" variant="subtle">
+                        {{ ep.sensitive ? "sensitive" : "info" }}
+                      </UBadge>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="text-[10px] opacity-40 mt-2">Probes common paths with GET requests (200/401/403 = endpoint exists).</p>
+          </UCard>
+
+          <!-- ── Subdomain Takeover Risks ── -->
+          <UCard :ui="{ body: { padding: 'p-3' }, header: { padding: 'px-3 py-2' } }">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <UIcon name="i-heroicons-exclamation-triangle" class="w-4 h-4 opacity-60" />
+                <span class="text-sm font-medium">Subdomain Takeover Risks</span>
+                <UBadge size="xs" :color="(sr.data.takeovers ?? []).length ? 'red' : 'green'" variant="subtle">
+                  {{ (sr.data.takeovers ?? []).length ? (sr.data.takeovers.length + ' found') : 'none' }}
+                </UBadge>
+              </div>
+            </template>
+            <div v-if="!(sr.data.takeovers ?? []).length" class="text-sm opacity-50 py-1">
+              No subdomain takeover risks detected.
+            </div>
+            <div v-else class="space-y-2">
+              <div
+                v-for="t in sr.data.takeovers"
+                :key="t.subdomain"
+                class="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-2.5"
+              >
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-xs font-semibold font-mono">{{ t.subdomain }}</span>
+                  <UBadge size="xs" color="red" variant="subtle">HIGH</UBadge>
+                </div>
+                <div class="space-y-0.5 text-xs">
+                  <div class="flex gap-2">
+                    <span class="opacity-50 shrink-0 w-16">Provider</span>
+                    <span class="opacity-80">{{ t.provider }}</span>
+                  </div>
+                  <div class="flex gap-2">
+                    <span class="opacity-50 shrink-0 w-16">CNAME</span>
+                    <span class="font-mono opacity-70 truncate">{{ t.cname }}</span>
+                  </div>
+                  <div class="flex gap-2">
+                    <span class="opacity-50 shrink-0 w-16">Evidence</span>
+                    <span class="opacity-70 italic">"{{ t.evidence }}"</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p class="text-[10px] opacity-40 mt-2">Checks CNAME targets against known SaaS takeover fingerprints.</p>
           </UCard>
         </div>
 

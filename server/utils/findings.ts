@@ -2,6 +2,9 @@ import type { NmapHost } from "./parseNmap";
 import type { EmailSecurity } from "./emailSecurity";
 import type { WebSecurity } from "./webSecurity";
 import type { DnsPosture } from "./dnsPosture";
+import type { TakeoverResult } from "./takeoverCheck";
+import type { DiscoveredEndpoint } from "./endpointDiscovery";
+import type { TlsDeep } from "./tlsDeep";
 
 type Severity = "low" | "medium" | "high";
 
@@ -24,7 +27,10 @@ export function buildFindings(
   hosts: NmapHost[],
   email?: EmailSecurity,
   web?: WebSecurity,
-  dns?: DnsPosture
+  dns?: DnsPosture,
+  takeovers?: TakeoverResult[],
+  endpoints?: DiscoveredEndpoint[],
+  tlsDeep?: TlsDeep
 ): Finding[] {
   const findings: Finding[] = [];
 
@@ -400,6 +406,123 @@ export function buildFindings(
         "Centralize DNS and certificate management",
       ]),
     });
+  }
+
+  // ── SUBDOMAIN TAKEOVER FINDINGS ────────────────────────────────
+  if (takeovers && takeovers.length > 0) {
+    for (const t of takeovers) {
+      findings.push({
+        severity: "high",
+        title: "Possible subdomain takeover",
+        host: t.subdomain,
+        details: `CNAME points to ${t.cname} (${t.provider}). Evidence: "${t.evidence}"`,
+        recommendation: "Remove the dangling DNS record or re-claim the SaaS resource immediately.",
+        owasp: "A01 – Broken Access Control",
+        mitigations: [
+          `Delete or update the CNAME record for ${t.subdomain}`,
+          "If the SaaS service is still needed, recreate the resource (e.g. Heroku app, GitHub Pages)",
+          "Audit all CNAME records pointing to third-party services",
+          "Implement a process to remove DNS records when decommissioning services",
+        ],
+      });
+    }
+  }
+
+  // ── TLS DEEP FINDINGS ──────────────────────────────────────────
+  if (tlsDeep) {
+    if (tlsDeep.selfSigned) {
+      findings.push({
+        severity: "high",
+        title: "Self-signed TLS certificate detected",
+        details: "The TLS certificate appears to be self-signed and not issued by a trusted CA.",
+        recommendation: "Replace with a certificate from a trusted CA (e.g. Let's Encrypt).",
+        owasp: "A02 – Cryptographic Failures",
+        mitigations: [
+          "Obtain a certificate from a trusted CA (e.g. Let's Encrypt, DigiCert)",
+          "Enable auto-renewal to prevent future expiry issues",
+          "Remove the self-signed certificate from production",
+        ],
+      });
+    }
+
+    if (tlsDeep.weakCipher) {
+      findings.push({
+        severity: "medium",
+        title: "Weak TLS cipher suite detected",
+        details: `Negotiated cipher: ${tlsDeep.cipher}. This cipher is considered weak or deprecated.`,
+        recommendation: "Configure your server to prefer strong ciphers (AES-GCM, ChaCha20) and disable weak ones.",
+        owasp: "A02 – Cryptographic Failures",
+        mitigations: [
+          "Disable RC4, DES, 3DES, EXPORT, NULL, and ANON cipher suites",
+          "Prefer ECDHE + AES-GCM or ChaCha20-Poly1305",
+          "Use Mozilla SSL Configuration Generator for recommended settings",
+          "Test with: ssllabs.com/ssltest/",
+        ],
+      });
+    }
+  }
+
+  // ── ENDPOINT DISCOVERY FINDINGS ────────────────────────────────
+  if (endpoints && endpoints.length > 0) {
+    const sensitiveFound = endpoints.filter((e) => e.sensitive && e.status === 200);
+    const adminFound = endpoints.filter(
+      (e) => !e.sensitive && (e.path.includes("admin") || e.path.includes("login") || e.path.includes("dashboard"))
+    );
+
+    for (const ep of sensitiveFound) {
+      findings.push({
+        severity: "high",
+        title: `Sensitive file/path accessible: ${ep.path}`,
+        details: `HTTP ${ep.status} returned for ${ep.path}. This path may expose credentials, source code, or configuration.`,
+        recommendation: `Immediately restrict access to ${ep.path}. Remove from public web root if not needed.`,
+        owasp: "A05 – Security Misconfiguration",
+        mitigations: [
+          `Block access to ${ep.path} via web server config or firewall`,
+          "Remove sensitive files from public-facing directories",
+          "Audit web root for other exposed sensitive files",
+          "Add to monitoring/alerting for future access attempts",
+        ],
+      });
+    }
+
+    if (adminFound.length > 0) {
+      findings.push({
+        severity: "medium",
+        title: "Admin or login interface exposed publicly",
+        details: `Accessible paths: ${adminFound.map((e) => `${e.path} (${e.status})`).join(", ")}`,
+        recommendation: "Restrict admin interfaces to trusted IPs or VPN.",
+        owasp: "A01 – Broken Access Control",
+        mitigations: [
+          "Restrict admin paths to trusted IP ranges or VPN",
+          "Enable MFA on all admin interfaces",
+          "Consider moving admin interfaces to a non-standard path",
+          "Monitor and alert on failed login attempts",
+        ],
+      });
+    }
+  }
+
+  // ── ROBOTS.TXT INTELLIGENCE ────────────────────────────────────
+  if (web?.robotsTxtPaths && web.robotsTxtPaths.length > 0) {
+    const interestingPaths = web.robotsTxtPaths.filter((p) =>
+      ["/admin", "/internal", "/backup", "/private", "/api", "/config", "/debug", "/staging", "/test", "/dev"].some(
+        (kw) => p.toLowerCase().includes(kw)
+      )
+    );
+    if (interestingPaths.length > 0) {
+      findings.push({
+        severity: "low",
+        title: "Sensitive paths disclosed in robots.txt",
+        details: `robots.txt Disallow entries reveal potentially sensitive paths: ${interestingPaths.slice(0, 8).join(", ")}`,
+        recommendation: "Do not rely on robots.txt for security. Protect sensitive paths with proper access controls.",
+        owasp: "A05 – Security Misconfiguration",
+        mitigations: [
+          "Implement authentication/authorization on sensitive paths instead of relying on robots.txt",
+          "robots.txt is public — do not list paths you want hidden from attackers",
+          "Consider using a generic Disallow: / for areas that should not be crawled",
+        ],
+      });
+    }
   }
 
   return findings;
