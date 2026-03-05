@@ -60,10 +60,12 @@ export default defineEventHandler(async (event) => {
   } catch (err: any) {
     if (isENOENT(err)) {
       amassStatus = "missing";
-      amassNote = "Amass not installed — used crt.sh (certificate transparency) as fallback.";
+      amassNote = "Amass not installed — trying crt.sh fallback.";
     } else {
       amassStatus = "error";
-      amassNote = `Amass failed — used crt.sh (certificate transparency) as fallback. (${err?.message ?? "unknown error"})`;
+      // Truncate to first line to avoid verbose progress-bar spam in the note
+      const firstLine = (err?.message ?? "unknown error").split("\n")[0].slice(0, 120);
+      amassNote = `Amass failed — trying crt.sh fallback. (${firstLine})`;
     }
     // Fallback: query crt.sh certificate transparency logs
     try {
@@ -80,9 +82,13 @@ export default defineEventHandler(async (event) => {
           .filter((s) => s !== domain)
           .slice(0, 300);
         amassStatus = "crtsh";
+        amassNote = "Subdomains sourced from crt.sh certificate transparency logs (Amass unavailable).";
+      } else {
+        amassNote = (amassNote ?? "") + " crt.sh also failed.";
       }
     } catch {
       // crt.sh also failed — subdomains stays empty
+      amassNote = (amassNote ?? "") + " crt.sh also failed.";
     }
   }
 

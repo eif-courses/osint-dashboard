@@ -610,7 +610,14 @@ async function renderMermaidForResult(index: number) {
               </div>
             </template>
             <div
-              v-if="sr.data.meta?.toolStatus?.amass?.status === 'missing' || sr.data.meta?.toolStatus?.amass?.status === 'error' || sr.data.meta?.toolStatus?.amass?.status === 'crtsh'"
+              v-if="sr.data.meta?.toolStatus?.amass?.status === 'crtsh'"
+              class="flex items-start gap-1.5 text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded px-2 py-1.5 mb-2"
+            >
+              <UIcon name="i-heroicons-information-circle" class="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>{{ sr.data.meta.toolStatus.amass.note }}</span>
+            </div>
+            <div
+              v-else-if="sr.data.meta?.toolStatus?.amass?.status === 'missing' || sr.data.meta?.toolStatus?.amass?.status === 'error'"
               class="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded px-2 py-1.5 mb-2"
             >
               <UIcon name="i-heroicons-exclamation-triangle" class="w-3.5 h-3.5 mt-0.5 shrink-0" />
