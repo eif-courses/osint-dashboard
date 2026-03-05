@@ -20,6 +20,7 @@ export type WebSecurity = {
   };
   securityTxt: boolean;
   robotsTxt: boolean;
+  robotsTxtPaths: string[]; // Disallow entries found in robots.txt
 };
 
 async function getTlsCertInfo(hostname: string): Promise<{ expiry: string | null; daysLeft: number | null }> {
@@ -102,14 +103,24 @@ export async function getWebSecurity(domain: string): Promise<WebSecurity> {
     securityTxt = res.ok;
   } catch { /* ignore */ }
 
-  // robots.txt
+  // robots.txt — check existence and parse Disallow paths
   let robotsTxt = false;
+  let robotsTxtPaths: string[] = [];
   try {
     const res = await fetch(`https://${domain}/robots.txt`, {
       redirect: "follow",
       signal: AbortSignal.timeout(8_000),
     });
     robotsTxt = res.ok;
+    if (res.ok) {
+      const text = await res.text();
+      robotsTxtPaths = text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.toLowerCase().startsWith("disallow:"))
+        .map((line) => line.replace(/^disallow:\s*/i, "").trim())
+        .filter((p) => p && p !== "/");
+    }
   } catch { /* ignore */ }
 
   return {
@@ -122,5 +133,6 @@ export async function getWebSecurity(domain: string): Promise<WebSecurity> {
     cookies: { count: cookieCount },
     securityTxt,
     robotsTxt,
+    robotsTxtPaths,
   };
 }
