@@ -107,7 +107,7 @@ async function runScan() {
       });
       results.value[i] = { ...results.value[i], loading: false, data };
       await nextTick();
-      await renderMermaidForResult(i);
+      renderMermaidForResult(i); // fire-and-forget – must NOT be awaited or it can stall globalLoading
     } catch (e: any) {
       const error = e?.data?.statusMessage || e?.data?.message || e?.message || "Scan failed";
       results.value[i] = { ...results.value[i], loading: false, error };
@@ -308,363 +308,343 @@ async function renderMermaidForResult(index: number) {
 
 <template>
   <div class="max-w-6xl mx-auto p-4 md:p-6 space-y-4">
-    <!-- Header -->
-    <div class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+
+    <!-- ── Header ── -->
+    <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
       <div>
-        <h1 class="text-2xl md:text-3xl font-semibold tracking-tight">OSINT Exposure Dashboard</h1>
-        <p class="text-sm opacity-70 mt-1">
-          Amass (passive) + Nmap (-sT) + Email DNS checks · exports + graph + mitigation checklist.
-        </p>
+        <h1 class="text-xl font-bold tracking-tight">OSINT Exposure Dashboard</h1>
+        <p class="text-xs opacity-50 mt-0.5">Amass (passive) + Nmap (-sT) + Email DNS · exports · graph · mitigation checklist</p>
       </div>
-      <UButton
-        color="gray"
-        variant="soft"
-        icon="i-heroicons-academic-cap"
-        @click="showTeachingMode = !showTeachingMode"
-      >
+      <UButton size="xs" color="gray" variant="soft" icon="i-heroicons-academic-cap" @click="showTeachingMode = !showTeachingMode">
         Teaching mode: {{ showTeachingMode ? "On" : "Off" }}
       </UButton>
     </div>
 
-    <!-- Input Card -->
-    <UCard>
+    <!-- ── Input card ── -->
+    <UCard :ui="{ body: { padding: 'p-3 sm:p-4' }, header: { padding: 'px-3 py-2 sm:px-4' } }">
       <template #header>
         <div class="flex items-center gap-2">
-          <UIcon name="i-heroicons-globe-alt" class="w-5 h-5 opacity-70" />
-          <span class="font-medium">Targets</span>
+          <UIcon name="i-heroicons-globe-alt" class="w-4 h-4 opacity-60" />
+          <span class="text-sm font-medium">Targets</span>
         </div>
       </template>
 
       <div class="space-y-3">
-        <UFormField label="Domains (one per line, or comma-separated)">
-          <UTextarea
-            v-model="domainsInput"
-            placeholder="example.com&#10;another-domain.org&#10;third-domain.net"
-            :rows="4"
-            class="font-mono w-full"
-          />
-        </UFormField>
-
         <div class="flex flex-col md:flex-row gap-3">
+          <!-- Domain input -->
           <div class="flex-1">
-            <UFormField label="Search (findings / hosts)">
-              <UInput v-model="search" placeholder="ssh, dmarc, 443..." icon="i-heroicons-magnifying-glass" />
-            </UFormField>
+            <label class="text-xs font-medium opacity-70 mb-1 block">Domains (one per line or comma-separated)</label>
+            <UTextarea
+              v-model="domainsInput"
+              placeholder="example.com&#10;another.org"
+              :rows="3"
+              class="font-mono text-sm w-full"
+            />
           </div>
 
-          <div class="md:w-40">
-            <UFormField label="Severity">
+          <!-- Controls column -->
+          <div class="flex flex-col gap-2 md:w-52">
+            <div>
+              <label class="text-xs font-medium opacity-70 mb-1 block">Search findings / hosts</label>
+              <UInput v-model="search" placeholder="ssh, dmarc, 443…" icon="i-heroicons-magnifying-glass" size="sm" />
+            </div>
+            <div>
+              <label class="text-xs font-medium opacity-70 mb-1 block">Severity</label>
               <USelect
                 v-model="filterSeverity"
+                size="sm"
                 :options="[
-                  { label: 'All', value: 'all' },
+                  { label: 'All severities', value: 'all' },
                   { label: 'High', value: 'high' },
                   { label: 'Medium', value: 'medium' },
                   { label: 'Low', value: 'low' }
                 ]"
               />
-            </UFormField>
-          </div>
-
-          <div class="md:w-36 flex items-end">
-            <UButton :loading="globalLoading" icon="i-heroicons-play" class="w-full" @click="runScan">
+            </div>
+            <UButton :loading="globalLoading" icon="i-heroicons-play" size="sm" class="w-full mt-auto" @click="runScan">
               Run scan
             </UButton>
           </div>
         </div>
 
-        <div v-if="showTeachingMode">
-          <UAlert
-            color="blue"
-            variant="soft"
-            icon="i-heroicons-light-bulb"
-            title="Teaching mode"
-            description="Use findings as prompts: what is exposed, why it matters, and which mitigations developers should apply."
-          />
-        </div>
+        <UAlert
+          v-if="showTeachingMode"
+          color="blue"
+          variant="soft"
+          icon="i-heroicons-light-bulb"
+          title="Teaching mode"
+          description="Use findings as prompts: what is exposed, why it matters, and which mitigations developers should apply."
+          :ui="{ description: 'text-xs', title: 'text-sm font-medium' }"
+        />
       </div>
     </UCard>
 
-    <!-- Empty state -->
-    <UCard v-if="!results.length">
-      <div class="text-sm opacity-70">
-        Enter one or more domains above and click "Run scan". All findings, email security, open ports, subdomains and graphs will appear here.
-      </div>
-    </UCard>
+    <!-- ── Empty state ── -->
+    <div v-if="!results.length" class="text-sm opacity-50 text-center py-6">
+      Enter one or more domains above and click "Run scan".
+    </div>
 
-    <!-- Results for each domain -->
-    <div v-for="(sr, idx) in results" :key="sr.domain" class="space-y-4">
+    <!-- ── Results per domain ── -->
+    <div v-for="(sr, idx) in results" :key="sr.domain" class="space-y-3">
+
       <!-- Domain header bar -->
-      <div class="flex items-center justify-between gap-3 pt-2 border-t-2 border-gray-200 dark:border-gray-700">
-        <div class="flex flex-wrap items-center gap-3">
-          <h2 class="text-lg font-semibold font-mono">{{ sr.domain }}</h2>
+      <div class="flex items-center justify-between gap-3 pt-1 border-t-2 border-gray-200 dark:border-gray-700">
+        <div class="flex flex-wrap items-center gap-2 min-w-0">
+          <h2 class="text-base font-bold font-mono truncate">{{ sr.domain }}</h2>
           <template v-if="sr.data">
-            <UBadge :color="getSummaryCounts(sr.data).high ? 'red' : 'gray'" variant="subtle">
+            <UBadge size="xs" :color="getSummaryCounts(sr.data).high ? 'red' : 'gray'" variant="subtle">
               High: {{ getSummaryCounts(sr.data).high }}
             </UBadge>
-            <UBadge :color="getSummaryCounts(sr.data).med ? 'amber' : 'gray'" variant="subtle">
-              Medium: {{ getSummaryCounts(sr.data).med }}
+            <UBadge size="xs" :color="getSummaryCounts(sr.data).med ? 'amber' : 'gray'" variant="subtle">
+              Med: {{ getSummaryCounts(sr.data).med }}
             </UBadge>
-            <UBadge :color="getSummaryCounts(sr.data).low ? 'green' : 'gray'" variant="subtle">
+            <UBadge size="xs" :color="getSummaryCounts(sr.data).low ? 'green' : 'gray'" variant="subtle">
               Low: {{ getSummaryCounts(sr.data).low }}
             </UBadge>
           </template>
         </div>
-
-        <div v-if="sr.data" class="flex items-center gap-2 shrink-0">
-          <UButton size="xs" color="gray" variant="soft" icon="i-heroicons-arrow-down-tray" @click="exportMarkdown(sr.data)">
-            MD
-          </UButton>
-          <UButton size="xs" color="gray" variant="soft" icon="i-heroicons-document-arrow-down" @click="exportPDF(sr.data)">
-            PDF
-          </UButton>
-          <UButton size="xs" color="gray" variant="soft" icon="i-heroicons-clipboard" @click="copyText(JSON.stringify(sr.data, null, 2))">
-            JSON
-          </UButton>
+        <div v-if="sr.data" class="flex items-center gap-1 shrink-0">
+          <UButton size="xs" color="gray" variant="ghost" icon="i-heroicons-arrow-down-tray" @click="exportMarkdown(sr.data)">MD</UButton>
+          <UButton size="xs" color="gray" variant="ghost" icon="i-heroicons-document-arrow-down" @click="exportPDF(sr.data)">PDF</UButton>
+          <UButton size="xs" color="gray" variant="ghost" icon="i-heroicons-clipboard" @click="copyText(JSON.stringify(sr.data, null, 2))">JSON</UButton>
         </div>
       </div>
 
-      <!-- Scanning indicator -->
-      <div v-if="sr.loading" class="flex items-center gap-3 p-4">
-        <UIcon name="i-heroicons-arrow-path" class="w-5 h-5 animate-spin opacity-70" />
-        <span class="text-sm opacity-70">Scanning {{ sr.domain }}… this may take up to 2 minutes.</span>
+      <!-- Scanning spinner -->
+      <div v-if="sr.loading" class="flex items-center gap-2 py-3 px-4 rounded-xl bg-gray-50 dark:bg-gray-900/40">
+        <UIcon name="i-heroicons-arrow-path" class="w-4 h-4 animate-spin opacity-60 shrink-0" />
+        <span class="text-sm opacity-70">Scanning <span class="font-mono">{{ sr.domain }}</span>… up to 2 min.</span>
       </div>
 
       <!-- Error -->
-      <UAlert
-        v-else-if="sr.error"
-        color="red"
-        variant="soft"
-        icon="i-heroicons-exclamation-triangle"
-        :title="sr.error"
-      />
+      <UAlert v-else-if="sr.error" color="red" variant="soft" icon="i-heroicons-exclamation-triangle" :title="sr.error" />
 
-      <!-- All result sections expanded on same page -->
+      <!-- Results grid -->
       <template v-else-if="sr.data">
 
-        <!-- ── Findings ── -->
-        <UCard>
-          <template #header>
-            <div class="flex items-center gap-2">
-              <UIcon name="i-heroicons-shield-exclamation" class="w-5 h-5 opacity-70" />
-              <span class="font-medium">Findings</span>
-              <UBadge color="gray" variant="subtle">{{ getFindings(sr.data).length }}</UBadge>
-            </div>
-          </template>
+        <!-- Top row: Findings + Email Security side by side on wide screens -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
 
-          <div class="space-y-3">
-            <div v-if="!getFindings(sr.data).length" class="text-sm opacity-70">
-              No findings match your filters/search.
-            </div>
+          <!-- ── Findings ── -->
+          <UCard :ui="{ body: { padding: 'p-3' }, header: { padding: 'px-3 py-2' } }">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <UIcon name="i-heroicons-shield-exclamation" class="w-4 h-4 opacity-60" />
+                <span class="text-sm font-medium">Findings</span>
+                <UBadge size="xs" color="gray" variant="subtle">{{ getFindings(sr.data).length }}</UBadge>
+              </div>
+            </template>
 
-            <div v-for="(f, fi) in getFindings(sr.data)" :key="fi">
-              <UCard class="shadow-sm">
-                <template #header>
-                  <div class="flex items-start justify-between gap-3">
-                    <div class="min-w-0">
-                      <div class="flex items-center gap-2">
-                        <UBadge :color="sevColor(f.severity)" variant="subtle">{{ sevLabel(f.severity) }}</UBadge>
-                        <p class="font-semibold truncate">{{ f.title }}</p>
-                      </div>
-                      <p v-if="f.host" class="text-xs opacity-70 mt-1">
-                        Host: <span class="font-mono">{{ f.host }}</span>
-                      </p>
-                    </div>
-                    <UButton
-                      size="xs"
-                      color="gray"
-                      variant="ghost"
-                      icon="i-heroicons-clipboard"
-                      @click="copyText(`${f.title}\n${f.host ? 'Host: '+f.host+'\n' : ''}${f.details ?? ''}\n${f.recommendation ?? ''}\nMitigations:\n- ${(f.mitigations ?? []).join('\n- ')}`)"
-                    >
-                      Copy
-                    </UButton>
+            <div class="space-y-2">
+              <div v-if="!getFindings(sr.data).length" class="text-sm opacity-50 py-2">
+                No findings match your filters.
+              </div>
+
+              <div
+                v-for="(f, fi) in getFindings(sr.data)"
+                :key="fi"
+                class="rounded-lg border border-gray-200 dark:border-gray-800 p-3 space-y-1.5"
+              >
+                <!-- Finding header -->
+                <div class="flex items-start justify-between gap-2">
+                  <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+                    <UBadge size="xs" :color="sevColor(f.severity)" variant="subtle">{{ sevLabel(f.severity) }}</UBadge>
+                    <span class="text-sm font-semibold">{{ f.title }}</span>
                   </div>
-                </template>
+                  <UButton
+                    size="xs"
+                    color="gray"
+                    variant="ghost"
+                    icon="i-heroicons-clipboard"
+                    class="shrink-0"
+                    @click="copyText(`${f.title}\n${f.host ? 'Host: '+f.host+'\n' : ''}${f.details ?? ''}\n${f.recommendation ?? ''}\nMitigations:\n- ${(f.mitigations ?? []).join('\n- ')}`)"
+                  />
+                </div>
 
-                <div class="space-y-2">
-                  <p v-if="f.details" class="text-sm opacity-80">{{ f.details }}</p>
+                <p v-if="f.host" class="text-xs opacity-50 font-mono">{{ f.host }}</p>
+                <p v-if="f.details" class="text-xs opacity-70">{{ f.details }}</p>
 
-                  <div v-if="f.recommendation" class="rounded-xl p-3 bg-gray-50 dark:bg-gray-900/40">
-                    <p class="text-sm">
-                      <span class="font-medium">Recommendation:</span>
-                      <span class="opacity-80"> {{ f.recommendation }}</span>
-                    </p>
-                  </div>
+                <div v-if="f.recommendation" class="text-xs rounded-lg bg-gray-50 dark:bg-gray-900/40 px-2 py-1.5">
+                  <span class="font-medium">Rec:</span> <span class="opacity-70">{{ f.recommendation }}</span>
+                </div>
 
-                  <div v-if="(f.mitigations ?? []).length">
-                    <UAccordion :items="[{ label: `Mitigation checklist (${f.mitigations.length})`, content: 'checklist' }]">
-                      <template #item="{ item: accItem }">
-                        <div v-if="accItem.content === 'checklist'" class="space-y-2">
-                          <div
-                            v-for="(m, mi) in f.mitigations"
-                            :key="mi"
-                            class="flex items-start gap-2 rounded-xl border border-gray-200 dark:border-gray-800 px-3 py-2"
-                          >
-                            <input type="checkbox" class="mt-1" />
-                            <p class="text-sm opacity-80">{{ m }}</p>
-                          </div>
-                        </div>
-                      </template>
-                    </UAccordion>
-                  </div>
-
-                  <div v-if="showTeachingMode" class="text-xs opacity-70">
-                    Discussion idea: "Do we need this exposure? If yes, which mitigations are mandatory?"
+                <!-- Mitigations – always visible, no accordion -->
+                <div v-if="(f.mitigations ?? []).length" class="space-y-1 pt-0.5">
+                  <p class="text-xs font-medium opacity-60">Mitigations</p>
+                  <div
+                    v-for="(m, mi) in f.mitigations"
+                    :key="mi"
+                    class="flex items-start gap-2"
+                  >
+                    <input type="checkbox" class="mt-0.5 shrink-0" />
+                    <p class="text-xs opacity-70 leading-relaxed">{{ m }}</p>
                   </div>
                 </div>
-              </UCard>
-            </div>
-          </div>
-        </UCard>
 
-        <!-- ── Email Security ── -->
-        <UCard>
-          <template #header>
-            <div class="flex items-center gap-2">
-              <UIcon name="i-heroicons-envelope" class="w-5 h-5 opacity-70" />
-              <span class="font-medium">Email Security</span>
-            </div>
-          </template>
-
-          <div class="space-y-4">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <UCard>
-                <template #header>
-                  <div class="flex items-center justify-between">
-                    <span class="font-medium">SPF</span>
-                    <UBadge :color="sr.data.email?.spf?.record ? 'green' : 'red'" variant="subtle">
-                      {{ sr.data.email?.spf?.record ? 'Found' : 'Missing' }}
-                    </UBadge>
-                  </div>
-                </template>
-                <p class="text-sm opacity-80 break-words">
-                  {{ sr.data.email?.spf?.record || "No SPF TXT record found." }}
+                <p v-if="showTeachingMode" class="text-xs opacity-40 italic pt-0.5">
+                  Discussion: "Do we need this exposure? Which mitigations are mandatory?"
                 </p>
-              </UCard>
-
-              <UCard>
-                <template #header>
-                  <div class="flex items-center justify-between">
-                    <span class="font-medium">DMARC</span>
-                    <UBadge
-                      :color="
-                        !sr.data.email?.dmarc?.record ? 'red' :
-                        (String(sr.data.email?.dmarc?.policy).toLowerCase() === 'none' ? 'amber' : 'green')
-                      "
-                      variant="subtle"
-                    >
-                      {{
-                        !sr.data.email?.dmarc?.record ? "Missing" :
-                          (sr.data.email?.dmarc?.policy ? `p=${sr.data.email.dmarc.policy}` : "Present")
-                      }}
-                    </UBadge>
-                  </div>
-                </template>
-                <p class="text-sm opacity-80 break-words">
-                  {{ sr.data.email?.dmarc?.record || "No DMARC record found at _dmarc.<domain>." }}
-                </p>
-                <div class="text-sm opacity-80 mt-2" v-if="sr.data.email?.dmarc?.record">
-                  <span class="font-medium">Policy:</span> {{ sr.data.email?.dmarc?.policy || "unknown" }}
-                  <span v-if="sr.data.email?.dmarc?.subdomainPolicy">
-                    · <span class="font-medium">Subdomains:</span> {{ sr.data.email?.dmarc?.subdomainPolicy }}
-                  </span>
-                </div>
-              </UCard>
+              </div>
             </div>
+          </UCard>
 
-            <UCard>
-              <template #header>
-                <div class="flex items-center justify-between">
-                  <span class="font-medium">MX Records</span>
-                  <UBadge color="gray" variant="subtle">{{ getMxRows(sr.data).length }}</UBadge>
+          <!-- ── Email Security ── -->
+          <UCard :ui="{ body: { padding: 'p-3' }, header: { padding: 'px-3 py-2' } }">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <UIcon name="i-heroicons-envelope" class="w-4 h-4 opacity-60" />
+                <span class="text-sm font-medium">Email Security</span>
+              </div>
+            </template>
+
+            <div class="space-y-2">
+              <!-- SPF -->
+              <div class="rounded-lg border border-gray-200 dark:border-gray-800 p-2.5">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-xs font-semibold">SPF</span>
+                  <UBadge size="xs" :color="sr.data.email?.spf?.record ? 'green' : 'red'" variant="subtle">
+                    {{ sr.data.email?.spf?.record ? 'Found' : 'Missing' }}
+                  </UBadge>
                 </div>
-              </template>
-              <UTable
-                :rows="getMxRows(sr.data)"
-                :columns="[
-                  { key: 'priority', label: 'Priority' },
-                  { key: 'exchange', label: 'Mail server' }
-                ]"
-              />
-            </UCard>
+                <p class="text-xs opacity-60 break-all">{{ sr.data.email?.spf?.record || "No SPF TXT record found." }}</p>
+              </div>
 
-            <UCard>
-              <template #header>
-                <div class="flex items-center justify-between">
-                  <span class="font-medium">DKIM</span>
-                  <UBadge :color="(sr.data.email?.dkim?.foundSelectors?.length ?? 0) ? 'green' : 'amber'" variant="subtle">
+              <!-- DMARC -->
+              <div class="rounded-lg border border-gray-200 dark:border-gray-800 p-2.5">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-xs font-semibold">DMARC</span>
+                  <UBadge
+                    size="xs"
+                    :color="!sr.data.email?.dmarc?.record ? 'red' : (String(sr.data.email?.dmarc?.policy).toLowerCase() === 'none' ? 'amber' : 'green')"
+                    variant="subtle"
+                  >
+                    {{ !sr.data.email?.dmarc?.record ? "Missing" : (sr.data.email?.dmarc?.policy ? `p=${sr.data.email.dmarc.policy}` : "Present") }}
+                  </UBadge>
+                </div>
+                <p class="text-xs opacity-60 break-all">{{ sr.data.email?.dmarc?.record || "No DMARC record found." }}</p>
+                <p v-if="sr.data.email?.dmarc?.subdomainPolicy" class="text-xs opacity-50 mt-0.5">
+                  sp={{ sr.data.email.dmarc.subdomainPolicy }}
+                </p>
+              </div>
+
+              <!-- DKIM -->
+              <div class="rounded-lg border border-gray-200 dark:border-gray-800 p-2.5">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-xs font-semibold">DKIM</span>
+                  <UBadge size="xs" :color="(sr.data.email?.dkim?.foundSelectors?.length ?? 0) ? 'green' : 'amber'" variant="subtle">
                     {{ (sr.data.email?.dkim?.foundSelectors?.length ?? 0) ? "Likely enabled" : "Unknown" }}
                   </UBadge>
                 </div>
-              </template>
-              <p class="text-sm opacity-80">{{ sr.data.email?.dkim?.note }}</p>
-              <div v-if="sr.data.email?.dkim?.foundSelectors?.length" class="mt-3 flex flex-wrap gap-2">
-                <UBadge v-for="s in sr.data.email.dkim.foundSelectors" :key="s" color="blue" variant="subtle">
-                  {{ s }}
-                </UBadge>
+                <p class="text-xs opacity-60">{{ sr.data.email?.dkim?.note }}</p>
+                <div v-if="sr.data.email?.dkim?.foundSelectors?.length" class="mt-1 flex flex-wrap gap-1">
+                  <UBadge v-for="s in sr.data.email.dkim.foundSelectors" :key="s" size="xs" color="blue" variant="subtle">{{ s }}</UBadge>
+                </div>
               </div>
-            </UCard>
-          </div>
-        </UCard>
 
-        <!-- ── Hosts & Ports ── -->
-        <UCard>
-          <template #header>
-            <div class="flex items-center gap-2">
-              <UIcon name="i-heroicons-server" class="w-5 h-5 opacity-70" />
-              <span class="font-medium">Hosts & Ports</span>
-              <UBadge color="gray" variant="subtle">{{ getHostRows(sr.data).length }}</UBadge>
+              <!-- MX -->
+              <div class="rounded-lg border border-gray-200 dark:border-gray-800 p-2.5">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-xs font-semibold">MX Records</span>
+                  <UBadge size="xs" color="gray" variant="subtle">{{ getMxRows(sr.data).length }}</UBadge>
+                </div>
+                <div class="space-y-0.5">
+                  <div v-if="!getMxRows(sr.data).length" class="text-xs opacity-50">None found.</div>
+                  <div v-for="row in getMxRows(sr.data)" :key="row.exchange" class="flex items-center gap-2 text-xs">
+                    <span class="opacity-40 w-6 text-right shrink-0">{{ row.priority }}</span>
+                    <span class="font-mono opacity-70 truncate">{{ row.exchange }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
-          </template>
-          <UTable
-            :rows="getHostRows(sr.data)"
-            :columns="[
-              { key: 'host', label: 'Host' },
-              { key: 'ip', label: 'IP' },
-              { key: 'port', label: 'Port' },
-              { key: 'service', label: 'Service' },
-              { key: 'product', label: 'Product/Version' }
-            ]"
-          />
-        </UCard>
+          </UCard>
+        </div>
 
-        <!-- ── Subdomains ── -->
-        <UCard>
-          <template #header>
-            <div class="flex items-center gap-2">
-              <UIcon name="i-heroicons-list-bullet" class="w-5 h-5 opacity-70" />
-              <span class="font-medium">Subdomains</span>
-              <UBadge color="gray" variant="subtle">{{ sr.data.subdomains?.length ?? 0 }}</UBadge>
-            </div>
-          </template>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-            <div
-              v-for="s in (sr.data.subdomains ?? [])"
-              :key="s"
-              class="flex items-center justify-between gap-2 rounded-xl border border-gray-200 dark:border-gray-800 px-3 py-2"
-            >
-              <span class="font-mono text-sm truncate">{{ s }}</span>
-              <UButton size="xs" color="gray" variant="ghost" icon="i-heroicons-clipboard" @click="copyText(s)" />
-            </div>
-          </div>
-        </UCard>
+        <!-- Bottom row: Hosts & Ports + Subdomains + Graph -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
 
-        <!-- ── Domain Graph ── -->
-        <UCard>
+          <!-- ── Hosts & Ports ── -->
+          <UCard :ui="{ body: { padding: 'p-3' }, header: { padding: 'px-3 py-2' } }">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <UIcon name="i-heroicons-server" class="w-4 h-4 opacity-60" />
+                <span class="text-sm font-medium">Hosts & Ports</span>
+                <UBadge size="xs" color="gray" variant="subtle">{{ getHostRows(sr.data).length }}</UBadge>
+              </div>
+            </template>
+            <div v-if="!getHostRows(sr.data).length" class="text-sm opacity-50 py-1">No open ports found.</div>
+            <div v-else class="overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr class="border-b border-gray-200 dark:border-gray-800">
+                    <th class="text-left py-1.5 pr-3 opacity-50 font-medium">Host</th>
+                    <th class="text-left py-1.5 pr-3 opacity-50 font-medium">IP</th>
+                    <th class="text-left py-1.5 pr-3 opacity-50 font-medium">Port</th>
+                    <th class="text-left py-1.5 pr-3 opacity-50 font-medium">Service</th>
+                    <th class="text-left py-1.5 opacity-50 font-medium">Version</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="(row, ri) in getHostRows(sr.data)"
+                    :key="ri"
+                    class="border-b border-gray-100 dark:border-gray-900 last:border-0"
+                  >
+                    <td class="py-1 pr-3 font-mono truncate max-w-[120px]">{{ row.host }}</td>
+                    <td class="py-1 pr-3 font-mono opacity-60">{{ row.ip }}</td>
+                    <td class="py-1 pr-3 font-mono">{{ row.port }}</td>
+                    <td class="py-1 pr-3 opacity-80">{{ row.service }}</td>
+                    <td class="py-1 opacity-60 truncate max-w-[100px]">{{ row.product }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </UCard>
+
+          <!-- ── Subdomains ── -->
+          <UCard :ui="{ body: { padding: 'p-3' }, header: { padding: 'px-3 py-2' } }">
+            <template #header>
+              <div class="flex items-center gap-2">
+                <UIcon name="i-heroicons-list-bullet" class="w-4 h-4 opacity-60" />
+                <span class="text-sm font-medium">Subdomains</span>
+                <UBadge size="xs" color="gray" variant="subtle">{{ sr.data.subdomains?.length ?? 0 }}</UBadge>
+              </div>
+            </template>
+            <div v-if="!(sr.data.subdomains?.length)" class="text-sm opacity-50 py-1">No subdomains discovered.</div>
+            <div v-else class="grid grid-cols-1 gap-0.5 max-h-64 overflow-y-auto">
+              <div
+                v-for="s in (sr.data.subdomains ?? [])"
+                :key="s"
+                class="flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-gray-50 dark:hover:bg-gray-900/40 group"
+              >
+                <span class="font-mono text-xs truncate opacity-80">{{ s }}</span>
+                <UButton
+                  size="xs"
+                  color="gray"
+                  variant="ghost"
+                  icon="i-heroicons-clipboard"
+                  class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                  @click="copyText(s)"
+                />
+              </div>
+            </div>
+          </UCard>
+        </div>
+
+        <!-- ── Domain Graph (full width) ── -->
+        <UCard :ui="{ body: { padding: 'p-3' }, header: { padding: 'px-3 py-2' } }">
           <template #header>
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2">
-                <UIcon name="i-heroicons-share" class="w-5 h-5 opacity-70" />
-                <span class="font-medium">Domain graph</span>
+                <UIcon name="i-heroicons-share" class="w-4 h-4 opacity-60" />
+                <span class="text-sm font-medium">Domain graph</span>
               </div>
-              <UButton size="xs" color="gray" variant="soft" icon="i-heroicons-arrow-path" @click="renderMermaidForResult(idx)">
+              <UButton size="xs" color="gray" variant="ghost" icon="i-heroicons-arrow-path" @click="renderMermaidForResult(idx)">
                 Re-render
               </UButton>
             </div>
           </template>
-          <div v-if="!sr.mermaidSvg" class="text-sm opacity-70">Rendering graph…</div>
-          <div v-html="sr.mermaidSvg" class="overflow-auto"></div>
+          <div v-if="!sr.mermaidSvg" class="text-xs opacity-50">Rendering graph…</div>
+          <div v-html="sr.mermaidSvg" class="overflow-auto" />
         </UCard>
 
       </template>
