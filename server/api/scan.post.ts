@@ -52,10 +52,13 @@ export default defineEventHandler(async (event) => {
   let amassNote: string | undefined;
 
   try {
-    const amass = await execFileAsync("amass", ["enum", "-passive", "-d", domain], {
-      timeout: 60_000,
-      maxBuffer: 2 * 1024 * 1024
-    });
+    // Pass -timeout to amass (minutes) so it finishes cleanly before our hard kill.
+    // Node timeout is set 30 s longer to give amass time to flush its output.
+    const amass = await execFileAsync(
+      "amass",
+      ["enum", "-passive", "-d", domain, "-timeout", "3"],
+      { timeout: 210_000, maxBuffer: 2 * 1024 * 1024 }
+    );
     subdomains = normalizeSubdomains(domain, amass.stdout).filter((s) => s !== domain).slice(0, 300);
   } catch (err: any) {
     if (isENOENT(err)) {

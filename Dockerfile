@@ -15,11 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl unzip nmap \
   && rm -rf /var/lib/apt/lists/*
 
-# Install Amass (binary release)
-# Install Amass (binary release)
+# Install Amass v3 (pinned — v4 has breaking CLI changes that break passive enum)
 RUN set -eux; \
   curl -fsSL -o /tmp/amass.tar.gz \
-    https://github.com/owasp-amass/amass/releases/latest/download/amass_linux_amd64.tar.gz \
+    https://github.com/owasp-amass/amass/releases/download/v3.23.3/amass_linux_amd64.tar.gz \
   && mkdir -p /opt/amass \
   && tar -xzf /tmp/amass.tar.gz -C /opt/amass \
   && ln -sf /opt/amass/amass_linux_amd64/amass /usr/local/bin/amass \
