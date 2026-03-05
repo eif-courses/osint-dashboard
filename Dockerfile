@@ -17,12 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Amass v3 (pinned — v4 has breaking CLI changes that break passive enum)
 RUN set -eux; \
-  curl -fsSL -o /tmp/amass.tar.gz \
-    https://github.com/owasp-amass/amass/releases/download/v3.23.3/amass_linux_amd64.tar.gz \
+  curl -fsSL -o /tmp/amass.zip \
+    https://github.com/owasp-amass/amass/releases/download/v3.23.3/amass_Linux_amd64.zip \
   && mkdir -p /opt/amass \
-  && tar -xzf /tmp/amass.tar.gz -C /opt/amass \
-  && ln -sf /opt/amass/amass_linux_amd64/amass /usr/local/bin/amass \
-  && rm -f /tmp/amass.tar.gz
+  && unzip -q /tmp/amass.zip -d /opt/amass \
+  && ln -sf /opt/amass/amass_Linux_amd64/amass /usr/local/bin/amass \
+  && rm -f /tmp/amass.zip
 
 COPY --from=build /app/.output ./.output
 COPY --from=build /app/package*.json ./
