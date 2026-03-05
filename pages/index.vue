@@ -449,9 +449,11 @@ async function renderMermaidForResult(index: number) {
           Version {{ APP_VERSION }} · DNS · HTTP/TLS headers · Email security · Amass (passive) · Nmap (-sT)
         </p>
       </div>
-      <UButton size="xs" color="gray" variant="soft" icon="i-heroicons-academic-cap" @click="showTeachingMode = !showTeachingMode">
-        Teaching mode: {{ showTeachingMode ? "On" : "Off" }}
-      </UButton>
+      <label class="flex items-center gap-2 cursor-pointer select-none">
+        <UIcon name="i-heroicons-academic-cap" class="w-4 h-4 opacity-60 shrink-0" />
+        <span class="text-xs font-medium opacity-70">Teaching mode</span>
+        <UToggle v-model="showTeachingMode" size="sm" />
+      </label>
     </div>
 
     <!-- ── Input card ── -->
@@ -464,7 +466,7 @@ async function renderMermaidForResult(index: number) {
       </template>
 
       <div class="space-y-3">
-        <div class="flex flex-col md:flex-row gap-3">
+        <div class="flex flex-col md:flex-row gap-3 items-end">
           <div class="flex-1">
             <label class="text-xs font-medium opacity-70 mb-1 block">Domains (one per line or comma-separated)</label>
             <UTextarea
@@ -474,29 +476,9 @@ async function renderMermaidForResult(index: number) {
               class="font-mono text-sm w-full"
             />
           </div>
-
-          <div class="flex flex-col gap-2 md:w-52">
-            <div>
-              <label class="text-xs font-medium opacity-70 mb-1 block">Search findings / hosts</label>
-              <UInput v-model="search" placeholder="ssh, dmarc, 443…" icon="i-heroicons-magnifying-glass" size="sm" />
-            </div>
-            <div>
-              <label class="text-xs font-medium opacity-70 mb-1 block">Severity</label>
-              <USelect
-                v-model="filterSeverity"
-                size="sm"
-                :options="[
-                  { label: 'All severities', value: 'all' },
-                  { label: 'High', value: 'high' },
-                  { label: 'Medium', value: 'medium' },
-                  { label: 'Low', value: 'low' }
-                ]"
-              />
-            </div>
-            <UButton :loading="globalLoading" icon="i-heroicons-play" size="sm" class="w-full mt-auto" @click="runScan">
-              Run scan
-            </UButton>
-          </div>
+          <UButton :loading="globalLoading" icon="i-heroicons-play" size="sm" class="shrink-0" @click="runScan">
+            Run scan
+          </UButton>
         </div>
 
         <UAlert
@@ -514,6 +496,23 @@ async function renderMermaidForResult(index: number) {
     <!-- ── Empty state ── -->
     <div v-if="!results.length" class="text-sm opacity-50 text-center py-6">
       Enter one or more domains above and click "Run scan".
+    </div>
+
+    <!-- ── Results filter bar ── -->
+    <div v-if="results.length" class="flex flex-wrap items-center gap-2">
+      <UInput v-model="search" placeholder="Search findings / hosts…" icon="i-heroicons-magnifying-glass" size="sm" class="w-48" />
+      <USelect
+        v-model="filterSeverity"
+        size="sm"
+        :items="[
+          { label: 'All severities', value: 'all' },
+          { label: 'High only', value: 'high' },
+          { label: 'Medium only', value: 'medium' },
+          { label: 'Low only', value: 'low' }
+        ]"
+        value-key="value"
+        class="w-36"
+      />
     </div>
 
     <!-- ── Results per domain ── -->
