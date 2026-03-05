@@ -48,7 +48,7 @@ export default defineEventHandler(async (event) => {
 
   // AMASS (passive OSINT) — safe fallback
   let subdomains: string[] = [];
-  let amassStatus: "ok" | "missing" | "error" = "ok";
+  let amassStatus: "ok" | "missing" | "error" | "crtsh" = "ok";
   let amassNote: string | undefined;
 
   try {
@@ -56,17 +56,34 @@ export default defineEventHandler(async (event) => {
       timeout: 60_000,
       maxBuffer: 2 * 1024 * 1024
     });
-    subdomains = normalizeSubdomains(domain, amass.stdout).slice(0, 300);
+    subdomains = normalizeSubdomains(domain, amass.stdout).filter((s) => s !== domain).slice(0, 300);
   } catch (err: any) {
     if (isENOENT(err)) {
       amassStatus = "missing";
-      amassNote = "Amass is not installed in this environment. Install it or run via Docker image.";
+      amassNote = "Amass not installed — used crt.sh (certificate transparency) as fallback.";
     } else {
       amassStatus = "error";
-      amassNote = `Amass failed: ${err?.message ?? "unknown error"}`;
+      amassNote = `Amass failed — used crt.sh (certificate transparency) as fallback. (${err?.message ?? "unknown error"})`;
     }
-    // Fallback: still include the root domain so the scan works
-    subdomains = [domain];
+    // Fallback: query crt.sh certificate transparency logs
+    try {
+      const res = await fetch(`https://crt.sh/?q=%.${domain}&output=json`, {
+        signal: AbortSignal.timeout(15_000),
+        headers: { "Accept": "application/json" }
+      });
+      if (res.ok) {
+        const data = await res.json() as Array<{ name_value: string }>;
+        const names = data.flatMap((r) =>
+          r.name_value.split("\n").map((s) => s.trim().replace(/^\*\./, "").toLowerCase())
+        );
+        subdomains = normalizeSubdomains(domain, names.join("\n"))
+          .filter((s) => s !== domain)
+          .slice(0, 300);
+        amassStatus = "crtsh";
+      }
+    } catch {
+      // crt.sh also failed — subdomains stays empty
+    }
   }
 
   // Guardrails: don’t scan too many hosts (and always scan at least root domain)
