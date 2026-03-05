@@ -1,0 +1,198 @@
+import type { NmapHost } from "./parseNmap";
+import type { EmailSecurity } from "./emailSecurity";
+
+type Severity = "low" | "medium" | "high";
+
+export type Finding = {
+  severity: Severity;
+  title: string;
+  host?: string;
+  details?: string;
+  recommendation?: string;
+  mitigations?: string[];
+};
+
+function uniq(arr: string[]) {
+  return Array.from(new Set(arr.filter(Boolean)));
+}
+
+export function buildFindings(_domain: string, hosts: NmapHost[], email?: EmailSecurity): Finding[] {
+  const findings: Finding[] = [];
+
+  // EMAIL FINDINGS
+  if (email) {
+    if (!email.spf.record) {
+      findings.push({
+        severity: "high",
+        title: "SPF record not found",
+        details: "No TXT record starting with v=spf1 was found on the root domain.",
+        recommendation: "Publish an SPF record for your sending providers.",
+        mitigations: [
+          "Identify all authorized senders (Microsoft 365, Google, transactional providers)",
+          "Publish SPF (v=spf1 ... ~all) and validate with test mail",
+          "Keep SPF under 10 DNS lookups (use includes carefully)",
+          "Monitor deliverability + SPF failures"
+        ]
+      });
+    }
+
+    if (!email.dmarc.record) {
+      findings.push({
+        severity: "high",
+        title: "DMARC record not found",
+        details: "No DMARC TXT record was found at _dmarc.<domain>.",
+        recommendation: "Publish DMARC (start with p=none, then quarantine/reject).",
+        mitigations: [
+          "Add DMARC record at _dmarc.<domain>",
+          "Start with p=none and collect reports (rua) for 1–2 weeks",
+          "Fix SPF/DKIM alignment for legitimate senders",
+          "Move to p=quarantine, then p=reject"
+        ]
+      });
+    } else {
+      const p = (email.dmarc.policy || "").toLowerCase();
+      if (p === "none") {
+        findings.push({
+          severity: "medium",
+          title: "DMARC is in monitoring mode (p=none)",
+          details: "DMARC will not block spoofing; it only collects reports.",
+          recommendation: "Move to p=quarantine/reject after alignment is correct.",
+          mitigations: [
+            "Confirm SPF passes for legitimate mail streams",
+            "Enable DKIM signing for all senders",
+            "Verify DMARC alignment (From domain aligns with SPF/DKIM identity)",
+            "Change p=none → p=quarantine",
+            "Later move p=quarantine → p=reject"
+          ]
+        });
+      } else if (p === "quarantine") {
+        findings.push({
+          severity: "low",
+          title: "DMARC policy is quarantine",
+          details: "Failing messages are typically sent to spam/junk.",
+          recommendation: "If reports are clean, consider p=reject.",
+          mitigations: [
+            "Review DMARC reports for false positives",
+            "Ensure all legitimate senders pass SPF/DKIM",
+            "Move to p=reject when confident"
+          ]
+        });
+      } else if (p === "reject") {
+        findings.push({
+          severity: "low",
+          title: "DMARC policy is reject",
+          details: "Failing messages are rejected (strong spoofing protection).",
+          mitigations: ["Keep monitoring reports", "Document authorized senders", "Re-check after adding new email services"]
+        });
+      } else {
+        findings.push({
+          severity: "medium",
+          title: "DMARC policy value is unusual or missing",
+          details: `Detected DMARC record but policy parsed as: ${email.dmarc.policy ?? "(none)"}`,
+          recommendation: "Ensure a valid p= value exists (none/quarantine/reject).",
+          mitigations: [
+            "Validate DMARC syntax with a DMARC checker",
+            "Ensure record includes: v=DMARC1; p=...",
+            "Add rua= mailbox to receive aggregate reports"
+          ]
+        });
+      }
+
+      const sp = (email.dmarc.subdomainPolicy || "").toLowerCase();
+      if (!sp && (email.dmarc.policy || "").toLowerCase() !== "reject") {
+        findings.push({
+          severity: "low",
+          title: "DMARC subdomain policy (sp=) not set",
+          details: "Subdomains inherit p= by default, but sp= makes intent explicit.",
+          recommendation: "Consider sp=quarantine or sp=reject.",
+          mitigations: ["Decide how subdomains should be treated", "Add sp=quarantine or sp=reject", "Ensure subdomain mail streams are aligned"]
+        });
+      }
+    }
+
+    if (!email.mx.length) {
+      findings.push({
+        severity: "low",
+        title: "No MX records found",
+        details: "If this domain is not used for email, this may be intentional.",
+        recommendation: "If you do send/receive email, configure MX records correctly.",
+        mitigations: ["Confirm whether the domain should receive mail", "If yes, add MX records for your provider", "If no, consider DMARC + SPF anyway"]
+      });
+    }
+  }
+
+  // NETWORK FINDINGS
+  for (const h of hosts) {
+    const open = h.ports.filter((p) => p.state === "open");
+    const has = (port: number) => open.some((p) => p.port === port);
+
+    if (has(22)) {
+      findings.push({
+        severity: "medium",
+        title: "SSH exposed to the internet (port 22)",
+        host: h.target,
+        recommendation: "Restrict SSH and enforce strong auth.",
+        mitigations: [
+          "Restrict SSH to VPN / allowlisted IPs",
+          "Disable password auth; use SSH keys",
+          "Enable MFA where possible",
+          "Harden SSH config (no root login, modern ciphers)",
+          "Monitor logs and add ban rules"
+        ]
+      });
+    }
+
+    if (has(3389)) {
+      findings.push({
+        severity: "high",
+        title: "RDP exposed to the internet (port 3389)",
+        host: h.target,
+        recommendation: "Close or restrict heavily (VPN/gateway).",
+        mitigations: ["Remove public exposure (firewall)", "Use VPN / Remote Desktop Gateway", "Enable MFA", "Monitor brute-force attempts"]
+      });
+    }
+
+    if (has(80) && !has(443)) {
+      findings.push({
+        severity: "medium",
+        title: "HTTP open without HTTPS",
+        host: h.target,
+        recommendation: "Enable TLS (443) and redirect 80 → 443.",
+        mitigations: ["Enable HTTPS with a valid certificate", "Redirect HTTP to HTTPS", "Add HSTS once stable", "Set secure headers (CSP, etc.)"]
+      });
+    }
+
+    if (has(25)) {
+      findings.push({
+        severity: "medium",
+        title: "SMTP exposed (port 25)",
+        host: h.target,
+        recommendation: "Ensure it’s intended and hardened.",
+        mitigations: ["Confirm SMTP is needed publicly", "Patch regularly", "Use SPF/DKIM/DMARC", "Restrict relay", "Monitor abuse + blocklists"]
+      });
+    }
+
+    if (has(3306) || has(5432) || has(27017)) {
+      findings.push({
+        severity: "high",
+        title: "Database port exposed to the internet",
+        host: h.target,
+        details: "Detected common DB ports (3306/5432/27017).",
+        recommendation: "Databases should not be public.",
+        mitigations: ["Move DB to private network/VPC", "Firewall DB ports", "Require VPN/bastion for admin access", "Rotate credentials and enable TLS"]
+      });
+    }
+  }
+
+  if (hosts.length >= 10) {
+    findings.push({
+      severity: "low",
+      title: "Large number of discovered hosts/subdomains",
+      details: `${hosts.length} hosts were scanned. Larger surface area usually increases risk.`,
+      recommendation: "Decommission unused subdomains/systems.",
+      mitigations: uniq(["Inventory subdomains and owners", "Remove stale dev/test/staging systems", "Ensure consistent TLS and auth policy", "Centralize DNS and certificate management"])
+    });
+  }
+
+  return findings;
+}
