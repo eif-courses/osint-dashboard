@@ -609,6 +609,13 @@ async function renderMermaidForResult(index: number) {
                 <UBadge size="xs" color="gray" variant="subtle">{{ sr.data.subdomains?.length ?? 0 }}</UBadge>
               </div>
             </template>
+            <div
+              v-if="sr.data.meta?.toolStatus?.amass?.status === 'missing' || sr.data.meta?.toolStatus?.amass?.status === 'error' || sr.data.meta?.toolStatus?.amass?.status === 'crtsh'"
+              class="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded px-2 py-1.5 mb-2"
+            >
+              <UIcon name="i-heroicons-exclamation-triangle" class="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>{{ sr.data.meta.toolStatus.amass.note }}</span>
+            </div>
             <div v-if="!(sr.data.subdomains?.length)" class="text-sm opacity-50 py-1">No subdomains discovered.</div>
             <div v-else class="grid grid-cols-1 gap-0.5 max-h-64 overflow-y-auto">
               <div
