@@ -4,24 +4,20 @@ import { PDFDocument, StandardFonts } from "pdf-lib";
 
 type Severity = "low" | "medium" | "high";
 
-const domain = ref("programuoki.lt");
-const loading = ref(false);
-const result = ref<any>(null);
-const errorMsg = ref<string | null>(null);
+interface DomainResult {
+  domain: string;
+  loading: boolean;
+  error: string | null;
+  data: any;
+  mermaidSvg: string;
+}
 
+const domainsInput = ref("programuoki.lt");
+const globalLoading = ref(false);
+const results = ref<DomainResult[]>([]);
 const showTeachingMode = ref(true);
-const filterSeverity = ref<Severity | "all">("all");
 const search = ref("");
-const activeTab = ref("findings");
-
-const tabs = [
-  { key: "findings", label: "Findings" },
-  { key: "email", label: "Email" },
-  { key: "hosts", label: "Hosts & Ports" },
-  { key: "subdomains", label: "Subdomains" },
-  { key: "graph", label: "Graph" },
-  { key: "raw", label: "Raw" }
-];
+const filterSeverity = ref<Severity | "all">("all");
 
 function sevColor(sev: Severity) {
   if (sev === "high") return "red";
@@ -35,8 +31,8 @@ function sevLabel(sev: Severity) {
   return "Low";
 }
 
-const findingsFiltered = computed(() => {
-  const list = (result.value?.findings ?? []) as any[];
+function getFindings(data: any) {
+  const list = (data?.findings ?? []) as any[];
   const q = search.value.trim().toLowerCase();
   return list.filter((f) => {
     const sevOk = filterSeverity.value === "all" || f.severity === filterSeverity.value;
@@ -45,10 +41,10 @@ const findingsFiltered = computed(() => {
     const qOk = !q || text.includes(q);
     return sevOk && qOk;
   });
-});
+}
 
-const hostsTableRows = computed(() => {
-  const hosts = (result.value?.hosts ?? []) as any[];
+function getHostRows(data: any) {
+  const hosts = (data?.hosts ?? []) as any[];
   const rows: any[] = [];
   for (const h of hosts) {
     const open = (h.ports ?? []).filter((p: any) => p.state === "open");
@@ -67,44 +63,58 @@ const hostsTableRows = computed(() => {
     if (!q) return true;
     return `${r.host} ${r.ip} ${r.port} ${r.service} ${r.product}`.toLowerCase().includes(q);
   });
-});
+}
 
-const mxTableRows = computed(() => {
-  const mx = result.value?.email?.mx ?? [];
-  return mx.map((line: string) => {
+function getMxRows(data: any) {
+  return (data?.email?.mx ?? []).map((line: string) => {
     const parts = line.split(" ");
     return { priority: parts[0] ?? "", exchange: parts.slice(1).join(" ") };
   });
-});
+}
 
-const summaryCounts = computed(() => {
-  const list = (result.value?.findings ?? []) as any[];
-  const high = list.filter((f) => f.severity === "high").length;
-  const med = list.filter((f) => f.severity === "medium").length;
-  const low = list.filter((f) => f.severity === "low").length;
-  return { high, med, low, total: list.length };
-});
+function getSummaryCounts(data: any) {
+  const list = (data?.findings ?? []) as any[];
+  return {
+    high: list.filter((f) => f.severity === "high").length,
+    med: list.filter((f) => f.severity === "medium").length,
+    low: list.filter((f) => f.severity === "low").length,
+    total: list.length
+  };
+}
 
 async function runScan() {
-  loading.value = true;
-  errorMsg.value = null;
-  result.value = null;
+  const domains = domainsInput.value
+    .split(/[\n,;]+/)
+    .map((d) => d.trim())
+    .filter(Boolean);
 
-  try {
-    result.value = await $fetch("/api/scan", {
-      method: "POST",
-      body: { domain: domain.value }
-    });
+  if (!domains.length) return;
 
-    if (activeTab.value === "graph") {
+  globalLoading.value = true;
+  results.value = domains.map((d) => ({
+    domain: d,
+    loading: true,
+    error: null,
+    data: null,
+    mermaidSvg: ""
+  }));
+
+  for (let i = 0; i < results.value.length; i++) {
+    try {
+      const data = await $fetch("/api/scan", {
+        method: "POST",
+        body: { domain: results.value[i].domain }
+      });
+      results.value[i] = { ...results.value[i], loading: false, data };
       await nextTick();
-      await renderMermaid();
+      await renderMermaidForResult(i);
+    } catch (e: any) {
+      const error = e?.data?.statusMessage || e?.data?.message || e?.message || "Scan failed";
+      results.value[i] = { ...results.value[i], loading: false, error };
     }
-  } catch (e: any) {
-    errorMsg.value = e?.data?.statusMessage || e?.data?.message || e?.message || "Scan failed";
-  } finally {
-    loading.value = false;
   }
+
+  globalLoading.value = false;
 }
 
 function copyText(text: string) {
@@ -202,10 +212,9 @@ function buildMarkdownReport(data: any) {
   return lines.join("\n");
 }
 
-async function exportMarkdown() {
-  if (!result.value) return;
-  const md = buildMarkdownReport(result.value);
-  downloadFile(`osint-report-${result.value.domain}.md`, md, "text/markdown");
+async function exportMarkdown(data: any) {
+  const md = buildMarkdownReport(data);
+  downloadFile(`osint-report-${data.domain}.md`, md, "text/markdown");
 }
 
 function wrapText(text: string, maxLen: number) {
@@ -225,14 +234,12 @@ function wrapText(text: string, maxLen: number) {
   return lines;
 }
 
-async function exportPDF() {
-  if (!result.value) return;
-  const md = buildMarkdownReport(result.value);
-
+async function exportPDF(data: any) {
+  const md = buildMarkdownReport(data);
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-  const pageSize = { width: 595.28, height: 841.89 }; // A4
+  const pageSize = { width: 595.28, height: 841.89 };
   const margin = 40;
   const fontSize = 10;
   const lineHeight = 14;
@@ -256,12 +263,10 @@ async function exportPDF() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `osint-report-${result.value.domain}.pdf`;
+  a.download = `osint-report-${data.domain}.pdf`;
   a.click();
   URL.revokeObjectURL(url);
 }
-
-const mermaidSvg = ref("");
 
 function buildMermaidGraph(data: any) {
   const root = data.domain;
@@ -287,24 +292,23 @@ function buildMermaidGraph(data: any) {
   return lines.join("\n");
 }
 
-async function renderMermaid() {
-  if (!result.value) return;
+async function renderMermaidForResult(index: number) {
+  const r = results.value[index];
+  if (!r?.data) return;
   mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "strict" });
-  const code = buildMermaidGraph(result.value);
-  const { svg } = await mermaid.render(`graph-${Date.now()}`, code);
-  mermaidSvg.value = svg;
-}
-
-watch(activeTab, async (t) => {
-  if (t === "graph" && result.value) {
-    await nextTick();
-    await renderMermaid();
+  const code = buildMermaidGraph(r.data);
+  try {
+    const { svg } = await mermaid.render(`graph-${index}-${Date.now()}`, code);
+    results.value[index] = { ...results.value[index], mermaidSvg: svg };
+  } catch (_) {
+    // ignore render errors
   }
-});
+}
 </script>
 
 <template>
   <div class="max-w-6xl mx-auto p-4 md:p-6 space-y-4">
+    <!-- Header -->
     <div class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
       <div>
         <h1 class="text-2xl md:text-3xl font-semibold tracking-tight">OSINT Exposure Dashboard</h1>
@@ -312,137 +316,148 @@ watch(activeTab, async (t) => {
           Amass (passive) + Nmap (-sT) + Email DNS checks · exports + graph + mitigation checklist.
         </p>
       </div>
-
-      <div class="flex items-center gap-2">
-        <UButton
-            color="gray"
-            variant="soft"
-            icon="i-heroicons-academic-cap"
-            @click="showTeachingMode = !showTeachingMode"
-        >
-          Teaching mode: {{ showTeachingMode ? "On" : "Off" }}
-        </UButton>
-        <UButton
-            v-if="result"
-            color="gray"
-            variant="soft"
-            icon="i-heroicons-arrow-down-tray"
-            @click="exportMarkdown"
-        >
-          Export MD
-        </UButton>
-        <UButton
-            v-if="result"
-            color="gray"
-            variant="soft"
-            icon="i-heroicons-document-arrow-down"
-            @click="exportPDF"
-        >
-          Export PDF
-        </UButton>
-      </div>
+      <UButton
+        color="gray"
+        variant="soft"
+        icon="i-heroicons-academic-cap"
+        @click="showTeachingMode = !showTeachingMode"
+      >
+        Teaching mode: {{ showTeachingMode ? "On" : "Off" }}
+      </UButton>
     </div>
 
+    <!-- Input Card -->
     <UCard>
       <template #header>
-        <div class="flex items-center justify-between gap-3">
-          <div class="flex items-center gap-2">
-            <UIcon name="i-heroicons-globe-alt" class="w-5 h-5 opacity-70" />
-            <span class="font-medium">Target</span>
-          </div>
-          <div v-if="result" class="flex items-center gap-2 text-sm">
-            <UBadge :color="summaryCounts.high ? 'red' : 'gray'" variant="subtle">High: {{ summaryCounts.high }}</UBadge>
-            <UBadge :color="summaryCounts.med ? 'amber' : 'gray'" variant="subtle">Medium: {{ summaryCounts.med }}</UBadge>
-            <UBadge :color="summaryCounts.low ? 'green' : 'gray'" variant="subtle">Low: {{ summaryCounts.low }}</UBadge>
-          </div>
+        <div class="flex items-center gap-2">
+          <UIcon name="i-heroicons-globe-alt" class="w-5 h-5 opacity-70" />
+          <span class="font-medium">Targets</span>
         </div>
       </template>
 
-      <div class="grid grid-cols-1 md:grid-cols-12 gap-3">
-        <div class="md:col-span-5">
-          <UFormField label="Domain (allowlisted)">
-            <UInput v-model="domain" placeholder="programuoki.lt" icon="i-heroicons-link" />
-          </UFormField>
-          <p class="text-xs opacity-60 mt-2">
-            Allowlist is in <code class="px-1 rounded bg-gray-100 dark:bg-gray-800">server/utils/allowlist.ts</code>
-          </p>
-        </div>
+      <div class="space-y-3">
+        <UFormField label="Domains (one per line, or comma-separated)">
+          <UTextarea
+            v-model="domainsInput"
+            placeholder="example.com&#10;another-domain.org&#10;third-domain.net"
+            :rows="4"
+            class="font-mono w-full"
+          />
+        </UFormField>
 
-        <div class="md:col-span-3">
-          <UFormField label="Search (findings / hosts)">
-            <UInput v-model="search" placeholder="ssh, dmarc, 443..." icon="i-heroicons-magnifying-glass" />
-          </UFormField>
-        </div>
+        <div class="flex flex-col md:flex-row gap-3">
+          <div class="flex-1">
+            <UFormField label="Search (findings / hosts)">
+              <UInput v-model="search" placeholder="ssh, dmarc, 443..." icon="i-heroicons-magnifying-glass" />
+            </UFormField>
+          </div>
 
-        <div class="md:col-span-2">
-          <UFormField label="Severity">
-            <USelect
+          <div class="md:w-40">
+            <UFormField label="Severity">
+              <USelect
                 v-model="filterSeverity"
                 :options="[
-                { label: 'All', value: 'all' },
-                { label: 'High', value: 'high' },
-                { label: 'Medium', value: 'medium' },
-                { label: 'Low', value: 'low' }
-              ]"
-            />
-          </UFormField>
+                  { label: 'All', value: 'all' },
+                  { label: 'High', value: 'high' },
+                  { label: 'Medium', value: 'medium' },
+                  { label: 'Low', value: 'low' }
+                ]"
+              />
+            </UFormField>
+          </div>
+
+          <div class="md:w-36 flex items-end">
+            <UButton :loading="globalLoading" icon="i-heroicons-play" class="w-full" @click="runScan">
+              Run scan
+            </UButton>
+          </div>
         </div>
 
-        <div class="md:col-span-2 flex items-end gap-2">
-          <UButton :loading="loading" icon="i-heroicons-play" class="w-full" @click="runScan">
-            Run scan
-          </UButton>
-        </div>
-      </div>
-
-      <UAlert
-          v-if="errorMsg"
-          class="mt-4"
-          color="red"
-          variant="soft"
-          icon="i-heroicons-exclamation-triangle"
-          :title="errorMsg"
-      />
-
-      <div v-if="showTeachingMode" class="mt-4">
-        <UAlert
+        <div v-if="showTeachingMode">
+          <UAlert
             color="blue"
             variant="soft"
             icon="i-heroicons-light-bulb"
             title="Teaching mode"
             description="Use findings as prompts: what is exposed, why it matters, and which mitigations developers should apply."
-        />
+          />
+        </div>
       </div>
     </UCard>
 
-    <UCard v-if="result">
-      <template #header>
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <UIcon name="i-heroicons-chart-bar" class="w-5 h-5 opacity-70" />
-            <span class="font-medium">Results</span>
-          </div>
-          <UButton
-              size="xs"
-              color="gray"
-              variant="soft"
-              icon="i-heroicons-clipboard"
-              @click="copyText(JSON.stringify(result, null, 2))"
-          >
-            Copy JSON
+    <!-- Empty state -->
+    <UCard v-if="!results.length">
+      <div class="text-sm opacity-70">
+        Enter one or more domains above and click "Run scan". All findings, email security, open ports, subdomains and graphs will appear here.
+      </div>
+    </UCard>
+
+    <!-- Results for each domain -->
+    <div v-for="(sr, idx) in results" :key="sr.domain" class="space-y-4">
+      <!-- Domain header bar -->
+      <div class="flex items-center justify-between gap-3 pt-2 border-t-2 border-gray-200 dark:border-gray-700">
+        <div class="flex flex-wrap items-center gap-3">
+          <h2 class="text-lg font-semibold font-mono">{{ sr.domain }}</h2>
+          <template v-if="sr.data">
+            <UBadge :color="getSummaryCounts(sr.data).high ? 'red' : 'gray'" variant="subtle">
+              High: {{ getSummaryCounts(sr.data).high }}
+            </UBadge>
+            <UBadge :color="getSummaryCounts(sr.data).med ? 'amber' : 'gray'" variant="subtle">
+              Medium: {{ getSummaryCounts(sr.data).med }}
+            </UBadge>
+            <UBadge :color="getSummaryCounts(sr.data).low ? 'green' : 'gray'" variant="subtle">
+              Low: {{ getSummaryCounts(sr.data).low }}
+            </UBadge>
+          </template>
+        </div>
+
+        <div v-if="sr.data" class="flex items-center gap-2 shrink-0">
+          <UButton size="xs" color="gray" variant="soft" icon="i-heroicons-arrow-down-tray" @click="exportMarkdown(sr.data)">
+            MD
+          </UButton>
+          <UButton size="xs" color="gray" variant="soft" icon="i-heroicons-document-arrow-down" @click="exportPDF(sr.data)">
+            PDF
+          </UButton>
+          <UButton size="xs" color="gray" variant="soft" icon="i-heroicons-clipboard" @click="copyText(JSON.stringify(sr.data, null, 2))">
+            JSON
           </UButton>
         </div>
-      </template>
+      </div>
 
-      <UTabs v-model="activeTab" :items="tabs" class="w-full">
-        <template #item="{ item }">
-          <!-- Findings -->
-          <div v-if="item.key === 'findings'" class="space-y-3">
-            <div v-if="!findingsFiltered.length" class="text-sm opacity-70">
+      <!-- Scanning indicator -->
+      <div v-if="sr.loading" class="flex items-center gap-3 p-4">
+        <UIcon name="i-heroicons-arrow-path" class="w-5 h-5 animate-spin opacity-70" />
+        <span class="text-sm opacity-70">Scanning {{ sr.domain }}… this may take up to 2 minutes.</span>
+      </div>
+
+      <!-- Error -->
+      <UAlert
+        v-else-if="sr.error"
+        color="red"
+        variant="soft"
+        icon="i-heroicons-exclamation-triangle"
+        :title="sr.error"
+      />
+
+      <!-- All result sections expanded on same page -->
+      <template v-else-if="sr.data">
+
+        <!-- ── Findings ── -->
+        <UCard>
+          <template #header>
+            <div class="flex items-center gap-2">
+              <UIcon name="i-heroicons-shield-exclamation" class="w-5 h-5 opacity-70" />
+              <span class="font-medium">Findings</span>
+              <UBadge color="gray" variant="subtle">{{ getFindings(sr.data).length }}</UBadge>
+            </div>
+          </template>
+
+          <div class="space-y-3">
+            <div v-if="!getFindings(sr.data).length" class="text-sm opacity-70">
               No findings match your filters/search.
             </div>
 
-            <div v-for="(f, i) in findingsFiltered" :key="i">
+            <div v-for="(f, fi) in getFindings(sr.data)" :key="fi">
               <UCard class="shadow-sm">
                 <template #header>
                   <div class="flex items-start justify-between gap-3">
@@ -455,13 +470,12 @@ watch(activeTab, async (t) => {
                         Host: <span class="font-mono">{{ f.host }}</span>
                       </p>
                     </div>
-
                     <UButton
-                        size="xs"
-                        color="gray"
-                        variant="ghost"
-                        icon="i-heroicons-clipboard"
-                        @click="copyText(`${f.title}\n${f.host ? 'Host: '+f.host+'\n' : ''}${f.details ?? ''}\n${f.recommendation ?? ''}\nMitigations:\n- ${(f.mitigations ?? []).join('\n- ')}`)"
+                      size="xs"
+                      color="gray"
+                      variant="ghost"
+                      icon="i-heroicons-clipboard"
+                      @click="copyText(`${f.title}\n${f.host ? 'Host: '+f.host+'\n' : ''}${f.details ?? ''}\n${f.recommendation ?? ''}\nMitigations:\n- ${(f.mitigations ?? []).join('\n- ')}`)"
                     >
                       Copy
                     </UButton>
@@ -479,17 +493,13 @@ watch(activeTab, async (t) => {
                   </div>
 
                   <div v-if="(f.mitigations ?? []).length">
-                    <UAccordion
-                        :items="[
-                        { label: `Mitigation checklist (${f.mitigations.length})`, content: 'checklist' }
-                      ]"
-                    >
+                    <UAccordion :items="[{ label: `Mitigation checklist (${f.mitigations.length})`, content: 'checklist' }]">
                       <template #item="{ item: accItem }">
                         <div v-if="accItem.content === 'checklist'" class="space-y-2">
                           <div
-                              v-for="(m, mi) in f.mitigations"
-                              :key="mi"
-                              class="flex items-start gap-2 rounded-xl border border-gray-200 dark:border-gray-800 px-3 py-2"
+                            v-for="(m, mi) in f.mitigations"
+                            :key="mi"
+                            class="flex items-start gap-2 rounded-xl border border-gray-200 dark:border-gray-800 px-3 py-2"
                           >
                             <input type="checkbox" class="mt-1" />
                             <p class="text-sm opacity-80">{{ m }}</p>
@@ -500,27 +510,36 @@ watch(activeTab, async (t) => {
                   </div>
 
                   <div v-if="showTeachingMode" class="text-xs opacity-70">
-                    Discussion idea: “Do we need this exposure? If yes, which mitigations are mandatory?”
+                    Discussion idea: "Do we need this exposure? If yes, which mitigations are mandatory?"
                   </div>
                 </div>
               </UCard>
             </div>
           </div>
+        </UCard>
 
-          <!-- Email -->
-          <div v-else-if="item.key === 'email'" class="space-y-4">
+        <!-- ── Email Security ── -->
+        <UCard>
+          <template #header>
+            <div class="flex items-center gap-2">
+              <UIcon name="i-heroicons-envelope" class="w-5 h-5 opacity-70" />
+              <span class="font-medium">Email Security</span>
+            </div>
+          </template>
+
+          <div class="space-y-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
               <UCard>
                 <template #header>
                   <div class="flex items-center justify-between">
                     <span class="font-medium">SPF</span>
-                    <UBadge :color="result.email?.spf?.record ? 'green' : 'red'" variant="subtle">
-                      {{ result.email?.spf?.record ? 'Found' : 'Missing' }}
+                    <UBadge :color="sr.data.email?.spf?.record ? 'green' : 'red'" variant="subtle">
+                      {{ sr.data.email?.spf?.record ? 'Found' : 'Missing' }}
                     </UBadge>
                   </div>
                 </template>
                 <p class="text-sm opacity-80 break-words">
-                  {{ result.email?.spf?.record || "No SPF TXT record found." }}
+                  {{ sr.data.email?.spf?.record || "No SPF TXT record found." }}
                 </p>
               </UCard>
 
@@ -529,27 +548,26 @@ watch(activeTab, async (t) => {
                   <div class="flex items-center justify-between">
                     <span class="font-medium">DMARC</span>
                     <UBadge
-                        :color="
-                        !result.email?.dmarc?.record ? 'red' :
-                        (String(result.email?.dmarc?.policy).toLowerCase() === 'none' ? 'amber' : 'green')
+                      :color="
+                        !sr.data.email?.dmarc?.record ? 'red' :
+                        (String(sr.data.email?.dmarc?.policy).toLowerCase() === 'none' ? 'amber' : 'green')
                       "
-                        variant="subtle"
+                      variant="subtle"
                     >
                       {{
-                        !result.email?.dmarc?.record ? "Missing" :
-                            (result.email?.dmarc?.policy ? `p=${result.email.dmarc.policy}` : "Present")
+                        !sr.data.email?.dmarc?.record ? "Missing" :
+                          (sr.data.email?.dmarc?.policy ? `p=${sr.data.email.dmarc.policy}` : "Present")
                       }}
                     </UBadge>
                   </div>
                 </template>
-
                 <p class="text-sm opacity-80 break-words">
-                  {{ result.email?.dmarc?.record || "No DMARC record found at _dmarc.<domain>." }}
+                  {{ sr.data.email?.dmarc?.record || "No DMARC record found at _dmarc.<domain>." }}
                 </p>
-                <div class="text-sm opacity-80 mt-2" v-if="result.email?.dmarc?.record">
-                  <span class="font-medium">Policy:</span> {{ result.email?.dmarc?.policy || "unknown" }}
-                  <span v-if="result.email?.dmarc?.subdomainPolicy">
-                    · <span class="font-medium">Subdomains:</span> {{ result.email?.dmarc?.subdomainPolicy }}
+                <div class="text-sm opacity-80 mt-2" v-if="sr.data.email?.dmarc?.record">
+                  <span class="font-medium">Policy:</span> {{ sr.data.email?.dmarc?.policy || "unknown" }}
+                  <span v-if="sr.data.email?.dmarc?.subdomainPolicy">
+                    · <span class="font-medium">Subdomains:</span> {{ sr.data.email?.dmarc?.subdomainPolicy }}
                   </span>
                 </div>
               </UCard>
@@ -559,13 +577,12 @@ watch(activeTab, async (t) => {
               <template #header>
                 <div class="flex items-center justify-between">
                   <span class="font-medium">MX Records</span>
-                  <UBadge color="gray" variant="subtle">{{ mxTableRows.length }}</UBadge>
+                  <UBadge color="gray" variant="subtle">{{ getMxRows(sr.data).length }}</UBadge>
                 </div>
               </template>
-
               <UTable
-                  :rows="mxTableRows"
-                  :columns="[
+                :rows="getMxRows(sr.data)"
+                :columns="[
                   { key: 'priority', label: 'Priority' },
                   { key: 'exchange', label: 'Mail server' }
                 ]"
@@ -576,105 +593,81 @@ watch(activeTab, async (t) => {
               <template #header>
                 <div class="flex items-center justify-between">
                   <span class="font-medium">DKIM</span>
-                  <UBadge :color="(result.email?.dkim?.foundSelectors?.length ?? 0) ? 'green' : 'amber'" variant="subtle">
-                    {{ (result.email?.dkim?.foundSelectors?.length ?? 0) ? "Likely enabled" : "Unknown" }}
+                  <UBadge :color="(sr.data.email?.dkim?.foundSelectors?.length ?? 0) ? 'green' : 'amber'" variant="subtle">
+                    {{ (sr.data.email?.dkim?.foundSelectors?.length ?? 0) ? "Likely enabled" : "Unknown" }}
                   </UBadge>
                 </div>
               </template>
-              <p class="text-sm opacity-80">{{ result.email?.dkim?.note }}</p>
-              <div v-if="result.email?.dkim?.foundSelectors?.length" class="mt-3 flex flex-wrap gap-2">
-                <UBadge v-for="s in result.email.dkim.foundSelectors" :key="s" color="blue" variant="subtle">
+              <p class="text-sm opacity-80">{{ sr.data.email?.dkim?.note }}</p>
+              <div v-if="sr.data.email?.dkim?.foundSelectors?.length" class="mt-3 flex flex-wrap gap-2">
+                <UBadge v-for="s in sr.data.email.dkim.foundSelectors" :key="s" color="blue" variant="subtle">
                   {{ s }}
                 </UBadge>
               </div>
             </UCard>
           </div>
+        </UCard>
 
-          <!-- Hosts -->
-          <div v-else-if="item.key === 'hosts'" class="space-y-4">
-            <UCard>
-              <template #header>
-                <div class="flex items-center justify-between">
-                  <span class="font-medium">Open ports (searchable)</span>
-                  <UBadge color="gray" variant="subtle">{{ hostsTableRows.length }}</UBadge>
-                </div>
-              </template>
+        <!-- ── Hosts & Ports ── -->
+        <UCard>
+          <template #header>
+            <div class="flex items-center gap-2">
+              <UIcon name="i-heroicons-server" class="w-5 h-5 opacity-70" />
+              <span class="font-medium">Hosts & Ports</span>
+              <UBadge color="gray" variant="subtle">{{ getHostRows(sr.data).length }}</UBadge>
+            </div>
+          </template>
+          <UTable
+            :rows="getHostRows(sr.data)"
+            :columns="[
+              { key: 'host', label: 'Host' },
+              { key: 'ip', label: 'IP' },
+              { key: 'port', label: 'Port' },
+              { key: 'service', label: 'Service' },
+              { key: 'product', label: 'Product/Version' }
+            ]"
+          />
+        </UCard>
 
-              <UTable
-                  :rows="hostsTableRows"
-                  :columns="[
-                  { key: 'host', label: 'Host' },
-                  { key: 'ip', label: 'IP' },
-                  { key: 'port', label: 'Port' },
-                  { key: 'service', label: 'Service' },
-                  { key: 'product', label: 'Product/Version' }
-                ]"
-              />
-            </UCard>
+        <!-- ── Subdomains ── -->
+        <UCard>
+          <template #header>
+            <div class="flex items-center gap-2">
+              <UIcon name="i-heroicons-list-bullet" class="w-5 h-5 opacity-70" />
+              <span class="font-medium">Subdomains</span>
+              <UBadge color="gray" variant="subtle">{{ sr.data.subdomains?.length ?? 0 }}</UBadge>
+            </div>
+          </template>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div
+              v-for="s in (sr.data.subdomains ?? [])"
+              :key="s"
+              class="flex items-center justify-between gap-2 rounded-xl border border-gray-200 dark:border-gray-800 px-3 py-2"
+            >
+              <span class="font-mono text-sm truncate">{{ s }}</span>
+              <UButton size="xs" color="gray" variant="ghost" icon="i-heroicons-clipboard" @click="copyText(s)" />
+            </div>
           </div>
+        </UCard>
 
-          <!-- Subdomains -->
-          <div v-else-if="item.key === 'subdomains'" class="space-y-3">
-            <UCard>
-              <template #header>
-                <div class="flex items-center justify-between">
-                  <span class="font-medium">Discovered subdomains</span>
-                  <UBadge color="gray" variant="subtle">{{ result.subdomains?.length ?? 0 }}</UBadge>
-                </div>
-              </template>
-
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                <div
-                    v-for="s in (result.subdomains ?? [])"
-                    :key="s"
-                    class="flex items-center justify-between gap-2 rounded-xl border border-gray-200 dark:border-gray-800 px-3 py-2"
-                >
-                  <span class="font-mono text-sm truncate">{{ s }}</span>
-                  <UButton size="xs" color="gray" variant="ghost" icon="i-heroicons-clipboard" @click="copyText(s)" />
-                </div>
+        <!-- ── Domain Graph ── -->
+        <UCard>
+          <template #header>
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <UIcon name="i-heroicons-share" class="w-5 h-5 opacity-70" />
+                <span class="font-medium">Domain graph</span>
               </div>
-            </UCard>
-          </div>
+              <UButton size="xs" color="gray" variant="soft" icon="i-heroicons-arrow-path" @click="renderMermaidForResult(idx)">
+                Re-render
+              </UButton>
+            </div>
+          </template>
+          <div v-if="!sr.mermaidSvg" class="text-sm opacity-70">Rendering graph…</div>
+          <div v-html="sr.mermaidSvg" class="overflow-auto"></div>
+        </UCard>
 
-          <!-- Graph -->
-          <div v-else-if="item.key === 'graph'" class="space-y-3">
-            <UCard>
-              <template #header>
-                <div class="flex items-center justify-between">
-                  <span class="font-medium">Domain graph</span>
-                  <UButton size="xs" color="gray" variant="soft" icon="i-heroicons-arrow-path" @click="renderMermaid">
-                    Re-render
-                  </UButton>
-                </div>
-              </template>
-
-              <div v-if="!mermaidSvg" class="text-sm opacity-70">Rendering graph...</div>
-              <div v-html="mermaidSvg" class="overflow-auto"></div>
-            </UCard>
-          </div>
-
-          <!-- Raw -->
-          <div v-else-if="item.key === 'raw'">
-            <UCard>
-              <template #header>
-                <div class="flex items-center justify-between">
-                  <span class="font-medium">Raw JSON</span>
-                  <UButton size="xs" color="gray" variant="soft" icon="i-heroicons-clipboard" @click="copyText(JSON.stringify(result, null, 2))">
-                    Copy
-                  </UButton>
-                </div>
-              </template>
-              <pre class="text-xs overflow-auto whitespace-pre-wrap">{{ JSON.stringify(result, null, 2) }}</pre>
-            </UCard>
-          </div>
-        </template>
-      </UTabs>
-    </UCard>
-
-    <UCard v-else>
-      <div class="text-sm opacity-70">
-        Run a scan to see results. Exports + graph become available after a scan.
-      </div>
-    </UCard>
+      </template>
+    </div>
   </div>
 </template>
